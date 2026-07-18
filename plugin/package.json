@@ -1,0 +1,25 @@
+{
+  "name": "oss-sync-plugin",
+  "version": "0.1.0",
+  "description": "Obsidian plugin for OSS (Obsidian Sync & Share) — self-hosted sync & lightweight blog publishing.",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs --production",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "diff-match-patch": "^1.0.5",
+    "lodash.debounce": "^4.0.8",
+    "p-limit": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/diff-match-patch": "^1.0.36",
+    "@types/lodash.debounce": "^4.0.9",
+    "@types/node": "^20.11.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "latest",
+    "typescript": "^5.4.0"
+  }
+}

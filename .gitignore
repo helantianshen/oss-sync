@@ -1,0 +1,32 @@
+# 二进制
+/oss-server
+/bin/
+*.exe
+
+# 运行期数据（含 SQLite、用户文件、附件）
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 本地配置覆盖
+configs/config.local.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code 本地会话
+.claude/
+.omo/
+
+# Go 工作区
+vendor/
+
+# 插件构建产物
+plugin/node_modules/
+plugin/main.js
+plugin/*.js.map
+plugin/dist/

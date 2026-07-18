@@ -1,0 +1,24 @@
+# OSS Server 生产环境配置
+# 通过 OSS_ENV=prod 加载
+# 部署时请把 jwt_secret / dsn 等敏感项改为通过环境变量或密钥管理覆盖
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "release"              # 生产环境关闭 debug
+  max_multipart_memory_mb: 8
+  max_file_size_mb: 100
+
+database:
+  driver: "sqlite"             # 生产亦可继续用 sqlite；如需切 PG 改成 postgres 并填 DSN
+  dsn: "data/oss.db"
+
+storage:
+  data_dir: "data"
+
+auth:
+  jwt_secret: "REPLACE-ME-IN-PRODUCTION"
+  jwt_ttl_hours: 72
+
+sync:
+  max_concurrency: 6

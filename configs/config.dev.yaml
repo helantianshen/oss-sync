@@ -1,0 +1,23 @@
+# OSS Server 开发环境配置
+# 通过 OSS_ENV=dev 加载（默认）
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"                # gin mode: debug / release / test
+  max_multipart_memory_mb: 8   # 决策 7.3: multipart 内存上限，超出自动落临时文件
+  max_file_size_mb: 100        # 决策 7.3: 单文件大小上限
+
+database:
+  driver: "sqlite"
+  dsn: "data/oss.db"
+
+storage:
+  data_dir: "data"             # 磁盘根：data/{user_id}/{path}（决策 7.3 物理落盘位置）
+
+auth:
+  jwt_secret: "dev-only-change-me"
+  jwt_ttl_hours: 72
+
+sync:
+  max_concurrency: 6           # 决策 7.2：客户端限流参考值（服务端只做兜底）

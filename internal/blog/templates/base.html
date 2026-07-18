@@ -1,0 +1,45 @@
+{{- /* OSS Blog Base Shell
+   - 决策 4：CustomHeader / CustomFooter 用 template.HTML 原样输出（信任边界内不转义）
+   - 决策 5：ThemeConfig 用 template.JS 注入，避免 html/template 默认转义破坏 JSON
+   - ThemeName 决定加载哪套静态 CSS/JS（/themes/{name}/style.css）
+   */ -}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <meta name="generator" content="OSS Blog">
+  <meta name="powered-by" content="oss-sync">
+
+  {{- /* 主题静态资源（默认 default）*/ -}}
+  <link rel="stylesheet" href="/themes/{{.ThemeName}}/style.css">
+  <script defer src="/themes/{{.ThemeName}}/theme.js"></script>
+
+  {{- /* 决策 5：ThemeConfig 注入为 JS 变量，template.JS 防止转义破坏 JSON */ -}}
+  <script>window.__THEME_CONFIG__ = {{.ThemeConfigJS}};</script>
+
+  {{- /* 决策 4：CustomHeader 信任边界内不转义 */ -}}
+  {{if .CustomHeader}}{{.CustomHeader}}{{end}}
+</head>
+<body>
+  <article class="oss-content">
+    {{- if .IsFolder -}}
+      <h1 class="oss-folder-title">{{.FolderTitle}}</h1>
+      <nav class="oss-tree">
+        {{.ContentHTML}}
+      </nav>
+    {{- else -}}
+      {{.ContentHTML}}
+    {{- end -}}
+  </article>
+
+  {{- /* 决策 4：CustomFooter 信任边界内不转义 */ -}}
+  {{if .CustomFooter}}{{.CustomFooter}}{{end}}
+
+  {{- /* 决策 6.4：友好提示文案（仅在 NotFound / Removed 时被替换）*/ -}}
+  {{if .FooterNotice}}
+  <div class="oss-notice">{{.FooterNotice}}</div>
+  {{end}}
+</body>
+</html>

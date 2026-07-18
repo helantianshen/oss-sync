@@ -1,0 +1,10 @@
+{
+  "id": "oss-sync",
+  "name": "Obsidian Sync & Share",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Self-hosted sync & share for Obsidian: Markdown + attachments + .obsidian config, LWW-based multi-device sync, lightweight blog publishing, and collaboration editing.",
+  "author": "OSS Project",
+  "authorUrl": "https://github.com/oss/oss-plugin",
+  "isDesktopOnly": false
+}

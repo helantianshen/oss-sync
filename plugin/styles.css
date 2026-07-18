@@ -1,0 +1,22 @@
+/* OSS Plugin styles — Phase 3 minimal */
+.oss-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.oss-status-bar.is-syncing { opacity: 0.7; }
+.oss-status-bar.is-error { color: var(--text-error); }
+
+/* Phase 5: 冲突 Diff Modal 预留 */
+.oss-conflict-modal .diff-pane {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  padding: 8px;
+  border-radius: 4px;
+}
+.oss-conflict-modal .diff-local { background: rgba(255, 100, 100, 0.08); }
+.oss-conflict-modal .diff-remote { background: rgba(100, 200, 100, 0.08); }
+.oss-conflict-modal .diff-insert { background: rgba(100, 200, 100, 0.25); }
+.oss-conflict-modal .diff-delete { background: rgba(255, 100, 100, 0.25); text-decoration: line-through; }
