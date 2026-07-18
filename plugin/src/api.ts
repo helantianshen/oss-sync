@@ -1,10 +1,7 @@
-// HTTP 客户端 — 调用 OSS 后端的 /api/auth/* 与 /api/sync/*。
+// OSS 后端 HTTP 客户端。
 //
-// JWT 持久化：存到 plugin loadData()（Obsidian 官方推荐的非敏感存储）。
+// JWT 由插件通过 loadData()/saveData() 持久化。
 // 失效或登录失败时抛错，由调用方决定 UI 提示。
-//
-// 决策 7.1：check 响应含 server_time，客户端缓存 time_offset。
-// 上传时 mtime = 本地真实 mtime + time_offset，强行以服务器时间为基准。
 
 import { requestUrl } from "obsidian";
 import type { OSSSettings } from "./settings";
@@ -19,7 +16,7 @@ export interface AuthResponse {
 
 export interface AuthStatus {
   readonly needs_first_admin: boolean;
-  readonly registration_mode: "first_admin" | "admin_only";
+  readonly registration_mode: "first_admin" | "anonymous" | "admin_only";
 }
 
 interface CheckFileIn {
@@ -49,6 +46,7 @@ export interface UploadResult {
 
 export interface ShareOut {
   share_id: string;
+  vault_id: string;
   target_path: string;
   is_folder: boolean;
   allow_copy: boolean;
@@ -65,8 +63,75 @@ export interface ShareCreateResult {
   extra?: ShareOut[];
 }
 
+export interface VaultOut {
+  id: string;
+  name: string;
+  description: string;
+  is_default: boolean;
+  storage_quota: number;
+  storage_used: number;
+  head_revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceVaultOut {
+  vault_id: string;
+  vault_name: string;
+  last_cursor: number;
+  head_revision: number;
+  pending_changes: number;
+  last_sync_at?: string;
+}
+
+export interface DeviceOut {
+  client_id: string;
+  name: string;
+  last_seen_at: string;
+  created_at: string;
+  revoked_at?: string;
+  stale: boolean;
+  is_current: boolean;
+  vaults: DeviceVaultOut[];
+}
+
+export interface SyncFileMeta {
+  path: string;
+  type: "markdown" | "attachment" | "config";
+  hash: string;
+  size: number;
+  mtime: number;
+  revision: number;
+  deleted: boolean;
+  server_time?: number;
+}
+
+export interface SyncManifestResponse {
+  snapshot_revision: number;
+  compacted_revision: number;
+  next_cursor: number;
+  has_more: boolean;
+  recovery_snapshot: boolean;
+  server_time: number;
+  files: SyncFileMeta[];
+}
+
+export class OSSApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly current?: SyncFileMeta,
+    readonly code?: string,
+    readonly compactedRevision?: number,
+    readonly headRevision?: number
+  ) {
+    super(message);
+    this.name = "OSSApiError";
+  }
+}
+
 export class OSSApiClient {
-  /** 决策 7.1：服务端时间 - 本地时间 的偏移（毫秒）。每次 check 刷新。 */
+  /** 服务端时间与本地时间的偏移，单位为毫秒。 */
   private timeOffset = 0;
   private token: string | null = null;
 
@@ -80,12 +145,10 @@ export class OSSApiClient {
     return !!this.token;
   }
 
-  /** 决策 7.1：上传/下载时用于校准的本地 mtime。 */
   getAdjustedMtime(localMtimeMs: number): number {
     return localMtimeMs + this.timeOffset;
   }
 
-  /** 决策 7.1：|offset| 超过 5 分钟时返回 true，UI 应警告。 */
   isClockDriftLarge(): boolean {
     return Math.abs(this.timeOffset) > 5 * 60 * 1000;
   }
@@ -117,11 +180,192 @@ export class OSSApiClient {
     return res;
   }
 
-  /**
-   * 调用 /api/sync/check。
-   * 决策 7.1：响应中的 server_time 用于刷新 timeOffset。
-   * 决策 6.5：mode 字段 incremental/full 由 settings 控制。
-   */
+  async listVaults(): Promise<{ vaults: VaultOut[] }> {
+    return this.doRequest<{ vaults: VaultOut[] }>("GET", "/api/vaults");
+  }
+
+  async createVault(name: string): Promise<VaultOut> {
+    return this.doRequest<VaultOut>("POST", "/api/vaults", { name });
+  }
+
+  async updateVault(vaultID: string, input: { name?: string; description?: string }): Promise<VaultOut> {
+    return this.doRequest<VaultOut>(
+      "PATCH",
+      `/api/vaults/${encodeURIComponent(vaultID)}`,
+      input
+    );
+  }
+
+  async archiveVault(vaultID: string): Promise<void> {
+    await this.doRequest<void>("DELETE", `/api/vaults/${encodeURIComponent(vaultID)}`);
+  }
+
+  async listDevices(): Promise<{ devices: DeviceOut[]; stale_after_days: number }> {
+    return this.doRequest<{ devices: DeviceOut[]; stale_after_days: number }>(
+      "GET",
+      "/api/devices"
+    );
+  }
+
+  async renameDevice(clientID: string, name: string): Promise<void> {
+    await this.doRequest<void>(
+      "PATCH",
+      `/api/devices/${encodeURIComponent(clientID)}`,
+      { name }
+    );
+  }
+
+  async revokeDevice(clientID: string): Promise<void> {
+    await this.doRequest<void>("DELETE", `/api/devices/${encodeURIComponent(clientID)}`);
+  }
+
+  async manifest(vaultID: string, after = 0, waitSeconds = 0): Promise<SyncManifestResponse> {
+    const before = Date.now();
+    const result = await this.doRequest<SyncManifestResponse>(
+      "GET",
+      `/api/vaults/${encodeURIComponent(vaultID)}/sync/manifest` +
+        `?after=${encodeURIComponent(String(after))}` +
+        `&limit=500&wait=${encodeURIComponent(String(waitSeconds))}` +
+        `&client_id=${encodeURIComponent(this.settings.clientId)}`
+    );
+    this.updateTimeOffset(result.server_time, before, Date.now());
+    return result;
+  }
+
+  async changes(vaultID: string, after: number, waitSeconds = 0): Promise<SyncManifestResponse> {
+    const before = Date.now();
+    const result = await this.doRequest<SyncManifestResponse>(
+      "GET",
+      `/api/vaults/${encodeURIComponent(vaultID)}/sync/changes` +
+        `?after=${encodeURIComponent(String(after))}` +
+        `&limit=500&wait=${encodeURIComponent(String(waitSeconds))}` +
+        `&client_id=${encodeURIComponent(this.settings.clientId)}`
+    );
+    this.updateTimeOffset(result.server_time, before, Date.now());
+    return result;
+  }
+
+  async acknowledge(vaultID: string, cursor: number): Promise<void> {
+    await this.doRequest<void>(
+      "POST",
+      `/api/vaults/${encodeURIComponent(vaultID)}/sync/ack`,
+      {
+        client_id: this.settings.clientId,
+        cursor,
+      }
+    );
+  }
+
+  async uploadV2(
+    vaultID: string,
+    input: {
+      path: string;
+      baseRevision: number;
+      hash: string;
+      mtime: number;
+      operationID: string;
+      content: ArrayBuffer;
+    }
+  ): Promise<SyncFileMeta> {
+    const query = new URLSearchParams({
+      path: input.path,
+      base_revision: String(input.baseRevision),
+      hash: input.hash,
+      mtime: String(input.mtime),
+      client_id: this.settings.clientId,
+      operation_id: input.operationID,
+    });
+    const res = await requestUrl({
+      url: this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync/upload?${query.toString()}`),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        ...this.authHeaders(),
+      },
+      body: input.content,
+      throw: false,
+    });
+    return this.parseResponse<SyncFileMeta>(res.status, res.json, res.text);
+  }
+
+  async downloadV2(
+    vaultID: string,
+    path: string,
+    revision: number
+  ): Promise<{ content: ArrayBuffer; meta: SyncFileMeta }> {
+    const query = new URLSearchParams({ path, revision: String(revision) });
+    const res = await requestUrl({
+      url: this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync/download?${query.toString()}`),
+      method: "GET",
+      headers: this.authHeaders(),
+      throw: false,
+    });
+    if (res.status >= 400) {
+      this.parseResponse<never>(res.status, res.json, res.text);
+    }
+    return {
+      content: res.arrayBuffer,
+      meta: {
+        path,
+        type: classifyPath(path),
+        hash: header(res.headers, "x-oss-hash"),
+        size: res.arrayBuffer.byteLength,
+        mtime: parseInt(header(res.headers, "x-oss-mtime") || "0", 10),
+        revision: parseInt(header(res.headers, "x-oss-revision") || "0", 10),
+        deleted: false,
+      },
+    };
+  }
+
+  async deleteV2(
+    vaultID: string,
+    input: {
+      path: string;
+      baseRevision: number;
+      operationID: string;
+      mtime: number;
+    }
+  ): Promise<SyncFileMeta> {
+    return this.doRequest<SyncFileMeta>(
+      "POST",
+      `/api/vaults/${encodeURIComponent(vaultID)}/sync/delete`,
+      {
+        path: input.path,
+        base_revision: input.baseRevision,
+        client_id: this.settings.clientId,
+        operation_id: input.operationID,
+        client_mtime: input.mtime,
+      }
+    );
+  }
+
+  async renameV2(
+    vaultID: string,
+    input: {
+      oldPath: string;
+      newPath: string;
+      baseRevision: number;
+      targetRevision: number;
+      operationID: string;
+      mtime: number;
+    }
+  ): Promise<{ old: SyncFileMeta; new: SyncFileMeta }> {
+    return this.doRequest<{ old: SyncFileMeta; new: SyncFileMeta }>(
+      "POST",
+      `/api/vaults/${encodeURIComponent(vaultID)}/sync/rename`,
+      {
+        old_path: input.oldPath,
+        new_path: input.newPath,
+        base_revision: input.baseRevision,
+        target_revision: input.targetRevision,
+        client_id: this.settings.clientId,
+        operation_id: input.operationID,
+        client_mtime: input.mtime,
+      }
+    );
+  }
+
+  /** 调用旧版同步检查接口，并更新本地时钟偏移。 */
   async check(files: CheckFileIn[], mode: "full" | "incremental"): Promise<CheckResponse> {
     const localBefore = Date.now();
     const res = await this.doRequest<CheckResponse>("POST", "/api/sync/check", {
@@ -129,14 +373,13 @@ export class OSSApiClient {
       files,
     });
     const localAfter = Date.now();
-    // 决策 7.1：用「网络往返中点」近似 server_time 对应的本地时刻。
-    // 这是工程化的近似，足够纠正分钟级漂移。
+    // 用请求往返中点估算服务端时间对应的本地时刻。
     const localMid = Math.floor((localBefore + localAfter) / 2);
     this.timeOffset = res.server_time - localMid;
     return res;
   }
 
-  /** 流式上传 — requestUrl 仅支持 string/ArrayBuffer，因此直接发送原始字节。 */
+  /** requestUrl 使用 ArrayBuffer 发送原始文件内容。 */
   async upload(path: string, adjustedMtime: number, content: ArrayBuffer): Promise<UploadResult> {
     const res = await requestUrl({
       url: this.url(
@@ -152,7 +395,6 @@ export class OSSApiClient {
     return res.json as UploadResult;
   }
 
-  /** 流式下载 — 决策 7.3：直接拿 ArrayBuffer。Phase 5 大文件场景需流式重写。 */
   async download(path: string): Promise<{ content: ArrayBuffer; mtime: number; hash: string }> {
     const res = await requestUrl({
       url: this.url("/api/sync/download?path=" + encodeURIComponent(path)),
@@ -177,6 +419,7 @@ export class OSSApiClient {
     recursiveBacklinks: boolean;
   }): Promise<ShareCreateResult> {
     return this.doRequest<ShareCreateResult>("POST", "/api/shares", {
+      vault_id: this.settings.vaultId,
       target_path: opts.targetPath,
       is_folder: opts.isFolder,
       allow_copy: opts.allowCopy,
@@ -185,7 +428,10 @@ export class OSSApiClient {
   }
 
   async listShares(): Promise<{ shares: ShareOut[] }> {
-    return this.doRequest<{ shares: ShareOut[] }>("GET", "/api/shares");
+    const query = this.settings.vaultId
+      ? `?vault_id=${encodeURIComponent(this.settings.vaultId)}`
+      : "";
+    return this.doRequest<{ shares: ShareOut[] }>("GET", `/api/shares${query}`);
   }
 
   async deleteShare(shareID: string): Promise<void> {
@@ -197,7 +443,12 @@ export class OSSApiClient {
   }
 
   private authHeaders(): Record<string, string> {
-    return this.token ? { Authorization: "Bearer " + this.token } : {};
+    const headers: Record<string, string> = {
+      "X-OSS-Client-ID": this.settings.clientId,
+      "X-OSS-Device-Name": encodeURIComponent(this.settings.deviceName),
+    };
+    if (this.token) headers.Authorization = "Bearer " + this.token;
+    return headers;
   }
 
   private async doRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -209,17 +460,50 @@ export class OSSApiClient {
         ...this.authHeaders(),
       },
       body: body ? JSON.stringify(body) : undefined,
+      throw: false,
     });
-    if (res.status >= 400) {
-      let msg = `HTTP ${res.status}`;
-      try {
-        const j = typeof res.json === "object" ? res.json : JSON.parse(res.text);
-        if (j && j.error) msg = j.error;
-      } catch {
-        /* ignore */
-      }
-      throw new Error(msg);
-    }
-    return res.json as T;
+    return this.parseResponse<T>(res.status, res.json, res.text);
   }
+
+  private parseResponse<T>(status: number, json: any, text: string): T {
+    if (status >= 400) {
+      let body: any = json;
+      if (!body || typeof body !== "object") {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = null;
+        }
+      }
+      throw new OSSApiError(
+        body?.error || `HTTP ${status}`,
+        status,
+        body?.current,
+        body?.code,
+        body?.compacted_revision,
+        body?.head_revision
+      );
+    }
+    return json as T;
+  }
+
+  private updateTimeOffset(serverTime: number, before: number, after: number): void {
+    if (!serverTime) return;
+    this.timeOffset = serverTime - Math.floor((before + after) / 2);
+  }
+}
+
+function header(headers: Record<string, string>, name: string): string {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value;
+  }
+  return "";
+}
+
+function classifyPath(path: string): "markdown" | "attachment" | "config" {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".md")) return "markdown";
+  if (lower.startsWith(".obsidian/")) return "config";
+  return "attachment";
 }

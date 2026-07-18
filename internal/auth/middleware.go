@@ -1,6 +1,6 @@
-// Package auth 提供 Phase 3 起正式的 JWT 鉴权 + 注册/登录 API。
+// Package auth 提供用户注册、登录和请求鉴权。
 //
-// Middleware 同时支持 Bearer JWT 与 Basic（Phase 2 占位保留）。
+// Middleware 同时支持 Bearer JWT 与 Basic 认证。
 // 任何 handler 用 auth.RequireUser(c) 取当前用户。
 package auth
 
@@ -15,11 +15,9 @@ import (
 	"github.com/oss/oss-server/internal/models"
 )
 
-// ContextKey 是 gin 上下文中存当前用户信息的键。
-// Phase 2 占位实现与本文件 Phase 3 共用，业务层调用不变。
+// ContextKey 是 gin 上下文中当前用户信息的键。
 const ContextKeyCurrentUser = "oss.current_user"
 
-// 阶段性错误，handler.go 与 middleware.go 共用。
 var (
 	errNoAuth       = errors.New("missing Authorization header")
 	errBadScheme    = errors.New("unsupported auth scheme")
@@ -47,9 +45,7 @@ func RequireUser(c *gin.Context) (*models.User, bool) {
 	return u, true
 }
 
-// Middleware 解析 Authorization 头，支持 Bearer JWT 与 Basic（Phase 2 占位保留）。
-// 实际的解析逻辑见 handler.go 的 authenticateAny。
-// 注意：此处签名与 Phase 2 不同，多了 cfg 参数。
+// Middleware 解析 Authorization 头并拒绝未认证请求。
 func Middleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, err := authenticateAny(db, cfg, c.GetHeader("Authorization"))

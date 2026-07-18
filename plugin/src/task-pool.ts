@@ -1,13 +1,9 @@
-// 并发控制队列 — 决策 7.2：限制同时 in-flight 上传/下载上限。
-// 默认 MAX_CONCURRENCY=6，可在设置中调，范围 1–10。
-// 单请求超时 60s，失败按指数退避重试最多 3 次。
-//
-// 不引入 p-limit 第三方依赖：手写最小信号量即可，减少 Obsidian 插件包大小。
+// 带并发限制和指数退避的任务池。
 
 export interface RetryOptions {
   maxConcurrency: number;
-  maxRetries: number; // 默认 3
-  baseDelayMs: number; // 默认 500ms，指数退避 base
+  maxRetries: number;
+  baseDelayMs: number;
 }
 
 export interface TaskResult<T> {
@@ -16,12 +12,6 @@ export interface TaskResult<T> {
   error?: Error;
 }
 
-/**
- * 并发限制 + 指数退避重试的任务池。
- * 用法：
- *   const pool = new TaskPool({ maxConcurrency: 6, maxRetries: 3, baseDelayMs: 500 });
- *   const results = await pool.run(items, async (item) => worker(item));
- */
 export class TaskPool {
   private active = 0;
   private readonly maxConcurrency: number;

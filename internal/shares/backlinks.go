@@ -8,19 +8,22 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/oss/oss-server/internal/filestore"
 	"github.com/oss/oss-server/internal/models"
 )
 
 var wikilinkRe = regexp.MustCompile(`\[\[([^\[\]\|]+)(?:\|[^\[\]]+)?\]\]`)
 
-func (h *Handler) collectBacklinks(userID uint, sourcePath string) ([]string, error) {
+func (h *Handler) collectBacklinks(userID uint, vaultID, sourcePath string) ([]string, error) {
 	var f models.File
-	if err := h.DB.Where("user_id = ? AND path = ? AND is_deleted = ? AND type = ?",
-		userID, sourcePath, false, "markdown").First(&f).Error; err != nil {
+	if err := h.DB.Where(
+		"user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ? AND type = ?",
+		userID, vaultID, sourcePath, false, "markdown",
+	).First(&f).Error; err != nil {
 		return nil, fmt.Errorf("source file not found: %s", sourcePath)
 	}
 
-	abs := filepath.Join(h.Cfg.Storage.DataDir, fmt.Sprintf("%d", userID), f.Path)
+	abs := filestore.DiskPath(h.Cfg.Storage.DataDir, f)
 	raw, err := readAbsFile(abs)
 	if err != nil {
 		return nil, err
@@ -41,10 +44,14 @@ func (h *Handler) collectBacklinks(userID uint, sourcePath string) ([]string, er
 			continue
 		}
 		var matches []models.File
-		h.DB.Where("user_id = ? AND is_deleted = ? AND type = ? AND path LIKE ?",
-			userID, false, "markdown", "%/"+candidate).
-			Or("user_id = ? AND is_deleted = ? AND type = ? AND path = ?",
-				userID, false, "markdown", candidate).
+		h.DB.Where(
+			"user_id = ? AND vault_id = ? AND is_deleted = ? AND type = ? AND path LIKE ?",
+			userID, vaultID, false, "markdown", "%/"+candidate,
+		).
+			Or(
+				"user_id = ? AND vault_id = ? AND is_deleted = ? AND type = ? AND path = ?",
+				userID, vaultID, false, "markdown", candidate,
+			).
 			Find(&matches)
 		if len(matches) == 0 {
 			continue

@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 
@@ -10,11 +11,13 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/oss/oss-server/internal/config"
+	"github.com/oss/oss-server/internal/reconcile"
 )
 
 type Scheduler struct {
 	cron *cron.Cron
 	cl   *Cleanup
+	rc   *reconcile.Reconciler
 }
 
 func NewScheduler(db *gorm.DB, cfg *config.Config) *Scheduler {
@@ -23,15 +26,25 @@ func NewScheduler(db *gorm.DB, cfg *config.Config) *Scheduler {
 	return &Scheduler{
 		cron: c,
 		cl:   NewCleanup(db, cfg),
+		rc:   reconcile.New(db, cfg),
 	}
 }
 
 func (s *Scheduler) Register() {
-	spec := "0 0 3 * * *"
+	spec := "0 3 * * *"
 	_, _ = s.cron.AddFunc(spec, func() {
-		if err := s.cl.PurgeRecycleBin(); err != nil {
-			log.Printf("[OSS cron] PurgeRecycleBin error: %v", err)
+		if err := s.cl.CompactTombstones(); err != nil {
+			log.Printf("[OSS cron] CompactTombstones error: %v", err)
 		}
+	})
+	reconcileSpec := fmt.Sprintf("@every %dh", s.cl.Cfg.Sync.EffectiveReconcileIntervalHours())
+	_, _ = s.cron.AddFunc(reconcileSpec, func() {
+		report, err := s.rc.Run(false)
+		if err != nil {
+			log.Printf("[OSS cron] storage reconciliation error: %v", err)
+			return
+		}
+		log.Printf("[OSS cron] storage reconciliation: %s", report.String())
 	})
 	_, _ = s.cron.AddFunc(spec, func() {
 		if err := s.cl.PurgeOrphanAttachments(); err != nil {
@@ -63,4 +76,4 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 
 func (s *Scheduler) Cleanup() *Cleanup { return s.cl }
 
-var _ = config.Env
+func (s *Scheduler) Reconciler() *reconcile.Reconciler { return s.rc }

@@ -1,12 +1,4 @@
-// Package markdown 提供 OSS 博客渲染用的 Goldmark 扩展：双链 [[...]] 解析。
-//
-// 决策 3（修正「二、2」）：
-//   - 渲染 [[链接文字]] 时，在「当前用户的 shares 表」全局查找文件名
-//     为「链接文字.md」的文章。仅已分享者渲染为 <a href="/p/{share_id}">。
-//   - 文件夹分享覆盖其下所有文件——文件夹分享路由渲染时预先把文件夹内
-//     所有文件视为"可被双链命中"，合并进全局查找集合。
-//   - 同名歧义取 CreatedAt 最近更新的 share_id。
-//   - 未命中渲染为 <span class="unshared-link">链接文字(未分享)</span>。
+// Package markdown 提供博客渲染使用的 Goldmark 扩展。
 package markdown
 
 import (
@@ -47,8 +39,6 @@ func (n *Wikilink) Dump(source []byte, level int) {
 // KindWikilink 是 Wikilink 节点的 AST kind。
 var KindWikilink = gast.NewNodeKind("Wikilink")
 
-// --- Parser ---
-
 type wikilinkParser struct{}
 
 func newWikilinkParser() parser.InlineParser {
@@ -59,15 +49,12 @@ func (p *wikilinkParser) Trigger() []byte {
 	return []byte{'['}
 }
 
-// Parse 拦截 [[ 开头，到 ]] 结束。
-// 失败时返回 nil，让 goldmark 把 [ 当普通文本。
+// Parse 解析单行 Obsidian 双链，无法匹配时交回 Goldmark 处理。
 func (p *wikilinkParser) Parse(parent gast.Node, block text.Reader, pc parser.Context) gast.Node {
-	// PeekLine 返回当前行；segment 提供偏移信息。
 	line, segment := block.PeekLine()
 	if len(line) < 2 || line[0] != '[' || line[1] != '[' {
 		return nil
 	}
-	// 找到 ]] 的位置
 	end := -1
 	for i := 2; i < len(line); i++ {
 		if line[i] == ']' && i+1 < len(line) && line[i+1] == ']' {
@@ -76,27 +63,22 @@ func (p *wikilinkParser) Parse(parent gast.Node, block text.Reader, pc parser.Co
 		}
 	}
 	if end < 0 {
-		// 跨行双链不支持（Obsidian 也基本不跨行），失败让 [ 走普通文本
 		return nil
 	}
 	inner := string(line[2:end])
 	if inner == "" {
 		return nil
 	}
-	// 消费整个 [[ ... ]] 区段（end 是第一个 ] 的位置，加 2 表示消费到第二个 ] 之后）
 	block.Advance(end + 2)
 	_ = segment
 	return &Wikilink{RawText: inner}
 }
-
-// --- Renderer ---
 
 type wikilinkHTMLRenderer struct {
 	resolver LinkResolver
 }
 
 // LinkResolver 把双链文字解析为 share_id；未命中返回空。
-// 决策 3：实现侧一次性加载用户 shares 索引，O(1) 查询。
 type LinkResolver interface {
 	// Resolve 返回 share_id（命中）或空字符串（未命中）。
 	Resolve(linkText string) (shareID string)
@@ -118,7 +100,6 @@ func (r *wikilinkHTMLRenderer) renderWikilink(w util.BufWriter, source []byte, n
 	if !ok {
 		return gast.WalkContinue, nil
 	}
-	// 决策 3：去掉别名/尺寸分隔 |（Obsidian [[X|别名]] 或 [[X|100x100]]）
 	rawText := n.RawText
 	linkText := rawText
 	displayText := rawText
@@ -143,19 +124,13 @@ func htmlEscape(s string) string {
 	return string(util.EscapeHTML([]byte(s)))
 }
 
-// --- Extension 装配 ---
-
 type wikilinkExtension struct {
 	resolver LinkResolver
 	assets   AssetResolver
 }
 
 func (e *wikilinkExtension) Extend(m goldmark.Markdown) {
-	// 始终注册 parser + renderer。resolver 为 nil 时 renderer 输出「未分享」占位。
-	//
-	// 注意 priority：goldmark 内置 linkParser（priority 200）的 Trigger 包含 '['，
-	// 遇到 [ 总是返回 linkLabelState 节点占用字符。要拦截 [[，必须把 wikilink
-	// parser 排在 linkParser 之前——priority 值更小（goldmark 按 priority 升序处理）。
+	// 双链解析器必须早于 Goldmark 内置链接解析器执行。
 	m.Parser().AddOptions(parser.WithInlineParsers(
 		util.Prioritized(&imageEmbedParser{}, 50),
 		util.Prioritized(newWikilinkParser(), 100),

@@ -41,7 +41,7 @@ func TestCollectBacklinks(t *testing.T) {
 	h.DB.Create(&models.File{UserID: userID, Path: "Notes/Go.md", Type: "markdown", MTime: 1, Hash: "g"})
 	h.DB.Create(&models.File{UserID: userID, Path: "Notes/Rust.md", Type: "markdown", MTime: 1, Hash: "r"})
 
-	links, err := h.collectBacklinks(userID, "Notes/Go.md")
+	links, err := h.collectBacklinks(userID, "", "Notes/Go.md")
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestCreateOne_SingleFile(t *testing.T) {
 	userID := uint(1)
 	h.DB.Create(&models.File{UserID: userID, Path: "Note.md", Type: "markdown", MTime: 1, Hash: "x"})
 
-	so, err := h.createOne(userID, "Note.md", false, true)
+	so, err := h.createOne(userID, "", "Note.md", false, true)
 	if err != nil {
 		t.Fatalf("createOne: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestCreateOne_SingleFile(t *testing.T) {
 
 func TestCreateOne_MissingFile(t *testing.T) {
 	h, _ := setupHandler(t)
-	_, err := h.createOne(1, "nope.md", false, false)
+	_, err := h.createOne(1, "", "nope.md", false, false)
 	if err == nil {
 		t.Error("expected error for missing file")
 	}
@@ -85,7 +85,7 @@ func TestCreateOne_MissingFile(t *testing.T) {
 
 func TestCreateOne_FolderSkipsExistenceCheck(t *testing.T) {
 	h, _ := setupHandler(t)
-	so, err := h.createOne(1, "SomeFolder/", true, false)
+	so, err := h.createOne(1, "", "SomeFolder/", true, false)
 	if err != nil {
 		t.Fatalf("folder createOne: %v", err)
 	}

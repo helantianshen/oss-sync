@@ -31,6 +31,7 @@ const (
 var base62Alphabet = []byte("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 type createRequest struct {
+	VaultID            string `json:"vault_id"`
 	TargetPath         string `json:"target_path" binding:"required"`
 	IsFolder           bool   `json:"is_folder"`
 	AllowCopy          bool   `json:"allow_copy"`
@@ -39,6 +40,7 @@ type createRequest struct {
 
 type shareOut struct {
 	ShareID    string `json:"share_id"`
+	VaultID    string `json:"vault_id"`
 	TargetPath string `json:"target_path"`
 	IsFolder   bool   `json:"is_folder"`
 	AllowCopy  bool   `json:"allow_copy"`
@@ -84,16 +86,21 @@ func (h *Handler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "target_path contains illegal segments"})
 		return
 	}
+	vaultID, err := h.resolveVaultID(u.ID, strings.TrimSpace(req.VaultID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "vault not found"})
+		return
+	}
 
 	extra := []shareOut{}
 	if req.RecursiveBacklinks && !req.IsFolder {
-		links, err := h.collectBacklinks(u.ID, req.TargetPath)
+		links, err := h.collectBacklinks(u.ID, vaultID, req.TargetPath)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		for _, p := range links {
-			so, err := h.createOne(u.ID, p, false, req.AllowCopy)
+			so, err := h.createOne(u.ID, vaultID, p, false, req.AllowCopy)
 			if err != nil {
 				continue
 			}
@@ -101,7 +108,7 @@ func (h *Handler) Create(c *gin.Context) {
 		}
 	}
 
-	so, err := h.createOne(u.ID, req.TargetPath, req.IsFolder, req.AllowCopy)
+	so, err := h.createOne(u.ID, vaultID, req.TargetPath, req.IsFolder, req.AllowCopy)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -115,11 +122,18 @@ func (h *Handler) Create(c *gin.Context) {
 	})
 }
 
-func (h *Handler) createOne(userID uint, targetPath string, isFolder, allowCopy bool) (shareOut, error) {
+func (h *Handler) createOne(
+	userID uint,
+	vaultID, targetPath string,
+	isFolder, allowCopy bool,
+) (shareOut, error) {
 	if !isFolder {
 		var cnt int64
 		h.DB.Model(&models.File{}).
-			Where("user_id = ? AND path = ? AND is_deleted = ?", userID, targetPath, false).
+			Where(
+				"user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ?",
+				userID, vaultID, targetPath, false,
+			).
 			Count(&cnt)
 		if cnt == 0 {
 			return shareOut{}, fmt.Errorf("file not found: %s", targetPath)
@@ -137,6 +151,7 @@ func (h *Handler) createOne(userID uint, targetPath string, isFolder, allowCopy 
 		rec := models.Share{
 			ShareID:    id,
 			UserID:     userID,
+			VaultID:    vaultID,
 			TargetPath: targetPath,
 			IsFolder:   isFolder,
 			AllowCopy:  allowCopy,
@@ -154,6 +169,7 @@ func (h *Handler) createOne(userID uint, targetPath string, isFolder, allowCopy 
 	}
 	return shareOut{
 		ShareID:    shareID,
+		VaultID:    vaultID,
 		TargetPath: targetPath,
 		IsFolder:   isFolder,
 		AllowCopy:  allowCopy,
@@ -167,7 +183,15 @@ func (h *Handler) List(c *gin.Context) {
 		return
 	}
 	var rows []models.Share
-	h.DB.Where("user_id = ?", u.ID).Order("created_at desc").Find(&rows)
+	query := h.DB.Where("user_id = ?", u.ID)
+	if vaultID := strings.TrimSpace(c.Query("vault_id")); vaultID != "" {
+		if _, err := h.resolveVaultID(u.ID, vaultID); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "vault not found"})
+			return
+		}
+		query = query.Where("vault_id = ?", vaultID)
+	}
+	query.Order("created_at desc").Find(&rows)
 	out := make([]shareOut, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, toOut(r))
@@ -214,6 +238,7 @@ func toOut(s models.Share) shareOut {
 	}
 	return shareOut{
 		ShareID:    s.ShareID,
+		VaultID:    s.VaultID,
 		TargetPath: s.TargetPath,
 		IsFolder:   s.IsFolder,
 		AllowCopy:  s.AllowCopy,
@@ -221,6 +246,20 @@ func toOut(s models.Share) shareOut {
 		URL:        "/p/" + s.ShareID,
 		CreatedAt:  created,
 	}
+}
+
+func (h *Handler) resolveVaultID(userID uint, requested string) (string, error) {
+	var vault models.Vault
+	query := h.DB.Where("owner_id = ?", userID)
+	if requested != "" {
+		query = query.Where("id = ?", requested)
+	} else {
+		query = query.Order("is_default desc, created_at asc")
+	}
+	if err := query.First(&vault).Error; err != nil {
+		return "", err
+	}
+	return vault.ID, nil
 }
 
 func genShareID() (string, error) {

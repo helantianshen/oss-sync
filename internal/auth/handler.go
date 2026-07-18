@@ -1,9 +1,9 @@
-// Package auth 提供 Phase 3 起正式的 JWT 鉴权 + 注册/登录 API。
+// Package auth 提供用户注册、登录和请求鉴权。
 //
-//	POST /api/auth/register  注册（prod 默认关闭，仅 admin 可调用，或 dev 开放）
+//	POST /api/auth/register  注册（默认仅 admin 可调用，可配置开放匿名普通用户注册）
 //	POST /api/auth/login      登录，返回 JWT
 //
-// Middleware 同时支持 Bearer JWT 与 Basic（Phase 2 占位保留）。
+// Middleware 同时支持 Bearer JWT 与 Basic 认证。
 // 任何 handler 用 auth.RequireUser(c) 取当前用户。
 package auth
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
@@ -45,8 +46,6 @@ func (h *Handler) Register(r *gin.Engine) {
 	}
 }
 
-// --- DTO ---
-
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=64"`
 	Password string `json:"password" binding:"required,min=8,max=128"`
@@ -67,7 +66,7 @@ type AuthResponse struct {
 }
 
 // RegisterUser 处理 POST /api/auth/register。
-// 生产环境默认要求已有 admin 身份（防止任意注册）。
+// 默认要求已有 admin 身份，可通过配置开放匿名普通用户注册。
 // dev 环境 + users 表为空时允许首次注册（即建首个 admin）。
 func (h *Handler) RegisterUser(c *gin.Context) {
 	h.registerMu.Lock()
@@ -101,15 +100,18 @@ func (h *Handler) RegisterUser(c *gin.Context) {
 	if !allowFirstAdmin {
 		cur := CurrentUser(c)
 		if cur == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error":      "首个 admin 已存在，匿名注册已关闭。请先用 admin 登录后再注册新用户",
-				"code":       "first_admin_exists",
-				"hint":       "login_first",
-				"need_admin": true,
-			})
-			return
-		}
-		if cur.Role != "admin" {
+			if h.Cfg.Auth.AllowAnonymousRegistration {
+				role = "user"
+			} else {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error":      "首个 admin 已存在，匿名注册已关闭。请先用 admin 登录后再注册新用户",
+					"code":       "first_admin_exists",
+					"hint":       "login_first",
+					"need_admin": true,
+				})
+				return
+			}
+		} else if cur.Role != "admin" {
 			c.JSON(http.StatusForbidden, gin.H{
 				"error": "仅 admin 可注册新用户，当前用户 " + cur.Username + " 无权限",
 				"code":  "not_admin",
@@ -133,7 +135,22 @@ func (h *Handler) RegisterUser(c *gin.Context) {
 		if err := tx.Create(&u).Error; err != nil {
 			return err
 		}
-		return tx.Create(&models.UserSetting{UserID: u.ID}).Error
+		if err := tx.Create(&models.UserSetting{UserID: u.ID}).Error; err != nil {
+			return err
+		}
+		vaultID := uuid.NewString()
+		if err := tx.Create(&models.Vault{
+			ID:        vaultID,
+			OwnerID:   u.ID,
+			Name:      "Default",
+			IsDefault: true,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.VaultSetting{VaultID: vaultID}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&models.VaultSyncState{VaultID: vaultID}).Error
 	}); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "username already exists"})
 		return
@@ -165,13 +182,16 @@ func (h *Handler) Status(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"needs_first_admin": config.Env() == "dev" && count == 0,
-		"registration_mode": registrationMode(count),
+		"registration_mode": h.registrationMode(count),
 	})
 }
 
-func registrationMode(userCount int64) string {
+func (h *Handler) registrationMode(userCount int64) string {
 	if config.Env() == "dev" && userCount == 0 {
 		return "first_admin"
+	}
+	if h.Cfg.Auth.AllowAnonymousRegistration {
+		return "anonymous"
 	}
 	return "admin_only"
 }
@@ -209,12 +229,6 @@ func (h *Handler) Login(c *gin.Context) {
 		Role:      u.Role,
 	})
 }
-
-// --- Middleware ---
-//
-// Middleware 实现见 middleware.go，这里只保留依赖说明：
-// authenticateAny 同时支持 Bearer JWT 与 Basic（Phase 2 占位保留）。
-// 任何 handler 用 auth.RequireUser(c) 取当前用户。
 
 func authenticateAny(db *gorm.DB, cfg *config.Config, header string) (*models.User, error) {
 	if header == "" {

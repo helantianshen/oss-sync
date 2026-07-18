@@ -5,19 +5,24 @@ server:
   host: "0.0.0.0"
   port: 8080
   mode: "debug"                # gin mode: debug / release / test
-  max_multipart_memory_mb: 8   # 决策 7.3: multipart 内存上限，超出自动落临时文件
-  max_file_size_mb: 100        # 决策 7.3: 单文件大小上限
+  max_multipart_memory_mb: 8   # multipart 内存上限，超出后写入临时文件
+  max_file_size_mb: 100        # 单文件大小上限
 
 database:
   driver: "sqlite"
   dsn: "data/oss.db"
 
 storage:
-  data_dir: "data"             # 磁盘根：data/{user_id}/{path}（决策 7.3 物理落盘位置）
+  data_dir: "data"
 
 auth:
   jwt_secret: "dev-only-change-me"
   jwt_ttl_hours: 72
+  allow_anonymous_registration: false # 开启后，任何人都可注册普通用户；匿名请求不能创建 admin
 
 sync:
-  max_concurrency: 6           # 决策 7.2：客户端限流参考值（服务端只做兜底）
+  max_concurrency: 6           # 客户端默认并发数
+  device_stale_days: 90        # 超过此天数未在线的设备不再阻塞墓碑回收
+  reconcile_interval_hours: 24 # 后台存储对账周期；服务启动时还会立即执行一次
+  temp_file_max_age_hours: 24  # 后台清理临时上传文件的最小年龄
+  orphan_file_grace_hours: 24  # 后台隔离孤立存储对象前的保护时间

@@ -2,16 +2,15 @@ package blog
 
 import (
 	"embed"
-	"fmt"
 	"net/http"
 	"net/url"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/oss/oss-server/internal/filestore"
 	"github.com/oss/oss-server/internal/markdown"
 	"github.com/oss/oss-server/internal/models"
 )
@@ -41,35 +40,44 @@ func (h *Handler) handleSharedAsset(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	file, err := h.resolveAssetFile(share.UserID, reference)
+	file, err := h.resolveAssetFile(share.UserID, share.VaultID, reference)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	abs := filepath.Join(h.Cfg.Storage.DataDir, fmt.Sprintf("%d", share.UserID), file.Path)
+	abs := filestore.DiskPath(h.Cfg.Storage.DataDir, file)
 	c.File(abs)
 }
 
 func (h *Handler) shareReferencesAsset(share models.Share, reference string) bool {
 	if !share.IsFolder {
-		return h.markdownReferencesAsset(share.UserID, share.TargetPath, reference)
+		return h.markdownReferencesAsset(share.UserID, share.VaultID, share.TargetPath, reference)
 	}
 	prefix := strings.TrimSuffix(share.TargetPath, "/") + "/"
 	var files []models.File
-	if err := h.DB.Where("user_id = ? AND path LIKE ? AND is_deleted = ? AND type = ?",
-		share.UserID, prefix+"%", false, "markdown").Find(&files).Error; err != nil {
+	if err := h.DB.Where(
+		"user_id = ? AND vault_id = ? AND path LIKE ? AND is_deleted = ? AND type = ?",
+		share.UserID, share.VaultID, prefix+"%", false, "markdown",
+	).Find(&files).Error; err != nil {
 		return false
 	}
 	for _, file := range files {
-		if h.markdownReferencesAsset(share.UserID, file.Path, reference) {
+		if h.markdownReferencesAsset(share.UserID, share.VaultID, file.Path, reference) {
 			return true
 		}
 	}
 	return false
 }
 
-func (h *Handler) markdownReferencesAsset(userID uint, markdownPath, reference string) bool {
-	abs := filepath.Join(h.Cfg.Storage.DataDir, fmt.Sprintf("%d", userID), markdownPath)
+func (h *Handler) markdownReferencesAsset(userID uint, vaultID, markdownPath, reference string) bool {
+	var file models.File
+	if err := h.DB.Where(
+		"user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ? AND type = ?",
+		userID, vaultID, markdownPath, false, "markdown",
+	).First(&file).Error; err != nil {
+		return false
+	}
+	abs := filestore.DiskPath(h.Cfg.Storage.DataDir, file)
 	raw, err := readFile(abs)
 	if err != nil {
 		return false
@@ -81,17 +89,19 @@ func (h *Handler) markdownReferencesAsset(userID uint, markdownPath, reference s
 	return slices.Contains(references, reference)
 }
 
-func (h *Handler) resolveAssetFile(userID uint, reference string) (models.File, error) {
+func (h *Handler) resolveAssetFile(userID uint, vaultID, reference string) (models.File, error) {
 	clean := strings.TrimPrefix(path.Clean("/"+reference), "/")
 	var file models.File
 	if strings.Contains(clean, "/") {
-		err := h.DB.Where("user_id = ? AND is_deleted = ? AND type = ? AND path = ?",
-			userID, false, "attachment", clean).First(&file).Error
+		err := h.DB.Where(
+			"user_id = ? AND vault_id = ? AND is_deleted = ? AND type = ? AND path = ?",
+			userID, vaultID, false, "attachment", clean,
+		).First(&file).Error
 		return file, err
 	}
 	err := h.DB.Where(
-		"user_id = ? AND is_deleted = ? AND type = ? AND (path = ? OR path = ? OR path LIKE ?)",
-		userID, false, "attachment", clean, clean, "%/"+clean,
+		"user_id = ? AND vault_id = ? AND is_deleted = ? AND type = ? AND (path = ? OR path LIKE ?)",
+		userID, vaultID, false, "attachment", clean, "%/"+clean,
 	).Order("m_time desc").First(&file).Error
 	return file, err
 }

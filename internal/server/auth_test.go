@@ -33,6 +33,34 @@ func TestRegisterRequiresAdminAfterFirst(t *testing.T) {
 	}
 }
 
+func TestAnonymousRegistrationEnabled(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.Cfg.Auth.AllowAnonymousRegistration = true
+	router := srv.Router()
+	registerAndLogin(t, router, "owner", "password123")
+
+	code, body := doJSON(t, router, "POST", "/api/auth/register", "", map[string]string{
+		"username": "member", "password": "password123",
+	})
+	if code != http.StatusOK || body["role"] != "user" {
+		t.Errorf("anonymous register: status=%d body=%v", code, body)
+	}
+}
+
+func TestAnonymousRegistrationCannotCreateAdmin(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.Cfg.Auth.AllowAnonymousRegistration = true
+	router := srv.Router()
+	registerAndLogin(t, router, "owner", "password123")
+
+	code, body := doJSON(t, router, "POST", "/api/auth/register", "", map[string]string{
+		"username": "member", "password": "password123", "role": "admin",
+	})
+	if code != http.StatusOK || body["role"] != "user" {
+		t.Errorf("anonymous admin escalation: status=%d body=%v", code, body)
+	}
+}
+
 func TestFirstRegistrationCreatesAdmin(t *testing.T) {
 	srv, db, _ := newTestServer(t)
 	code, body := doJSON(t, srv.Router(), "POST", "/api/auth/register", "", map[string]string{
@@ -94,6 +122,18 @@ func TestAdminCanRegisterUser(t *testing.T) {
 	}
 }
 
+func TestAdminCanRegisterAdmin(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	router := srv.Router()
+	adminToken := registerAndLogin(t, router, "owner", "password123")
+	code, body := doJSON(t, router, "POST", "/api/auth/register", adminToken, map[string]string{
+		"username": "second-admin", "password": "password123", "role": "admin",
+	})
+	if code != http.StatusOK || body["role"] != "admin" {
+		t.Errorf("admin register admin: status=%d body=%v", code, body)
+	}
+}
+
 func TestNonAdminCannotRegisterUser(t *testing.T) {
 	srv, db, _ := newTestServer(t)
 	router := srv.Router()
@@ -118,13 +158,31 @@ func TestAuthStatusTracksFirstAdmin(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	router := srv.Router()
 	code, body := doJSON(t, router, "GET", "/api/auth/status", "", nil)
-	if code != http.StatusOK || body["needs_first_admin"] != true {
+	if code != http.StatusOK ||
+		body["needs_first_admin"] != true ||
+		body["registration_mode"] != "first_admin" {
 		t.Fatalf("status before register: %d %v", code, body)
 	}
 	registerAndLogin(t, router, "owner", "password123")
 	code, body = doJSON(t, router, "GET", "/api/auth/status", "", nil)
-	if code != http.StatusOK || body["needs_first_admin"] != false {
+	if code != http.StatusOK ||
+		body["needs_first_admin"] != false ||
+		body["registration_mode"] != "admin_only" {
 		t.Fatalf("status after register: %d %v", code, body)
+	}
+}
+
+func TestAuthStatusReportsAnonymousRegistration(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	router := srv.Router()
+	registerAndLogin(t, router, "owner", "password123")
+	srv.Cfg.Auth.AllowAnonymousRegistration = true
+
+	code, body := doJSON(t, router, "GET", "/api/auth/status", "", nil)
+	if code != http.StatusOK ||
+		body["needs_first_admin"] != false ||
+		body["registration_mode"] != "anonymous" {
+		t.Fatalf("anonymous registration status: %d %v", code, body)
 	}
 }
 

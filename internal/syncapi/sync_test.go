@@ -4,13 +4,13 @@ import "testing"
 
 func TestClassifyFile(t *testing.T) {
 	cases := map[string]string{
-		"Note.md":               "markdown",
-		"Notes/Front/Go.md":     "markdown",
-		".obsidian/app.json":    "config",
+		"Note.md":                "markdown",
+		"Notes/Front/Go.md":      "markdown",
+		".obsidian/app.json":     "config",
 		".obsidian/themes/x.css": "config",
-		"img/photo.png":         "attachment",
-		"doc.pdf":               "attachment",
-		"video/clip.mp4":        "attachment",
+		"img/photo.png":          "attachment",
+		"doc.pdf":                "attachment",
+		"video/clip.mp4":         "attachment",
 	}
 	for in, want := range cases {
 		if got := classifyFile(in); got != want {

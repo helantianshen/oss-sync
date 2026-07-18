@@ -1,11 +1,4 @@
-// OSS Plugin main entry.
-// 装配：settings → api → baseline → syncEngine → 三监听器 → 状态栏 → Ribbon。
-//
-// 数据持久化：所有 settings + token 都存在 Obsidian 的 loadData()/saveData()
-// 单一对象里（结构见 PluginData）。
-//
-// Phase 3 范围：身份验证 + Vault 监听 + Lodash 防抖 + 并发上传下载 + 与 Phase 2 后端联调。
-// Phase 5 追加右键分享菜单 + 冲突 Diff Modal。
+// Obsidian 插件入口。
 
 import {
   App,
@@ -15,8 +8,9 @@ import {
   TAbstractFile,
   TFile,
   TFolder,
+  Vault,
 } from "obsidian";
-import { OSSApiClient } from "./api";
+import { OSSApiClient, VaultOut } from "./api";
 import { BaselineStore } from "./baseline";
 import { ConflictModal, ConflictResolution } from "./conflict-modal";
 import { OSSSettingTab } from "./settings-tab";
@@ -36,6 +30,7 @@ export default class OSSPlugin extends Plugin {
 
   private token?: string;
   private statusBarEl?: HTMLElement;
+  availableVaults: VaultOut[] = [];
 
   constructor(app: App, manifest: PluginManifest) {
     super(app, manifest);
@@ -50,41 +45,61 @@ export default class OSSPlugin extends Plugin {
 
     this.baseline = new BaselineStore(this.app.vault);
     this.syncEngine = new SyncEngine(this.app, this.api, this.baseline, this);
+    this.syncEngine.start();
 
-    // 状态栏图标
     this.statusBarEl = this.addStatusBarItem();
     this.statusBarEl.addClass("oss-status-bar");
     this.setSyncState("idle");
 
-    // 状态栏点击 = 全量同步（决策 6.5 全量校验按钮）
     this.statusBarEl.onClickEvent(() => {
       this.syncEngine.runOnce({ forceFull: true });
     });
 
-    // Ribbon 立即强制全量同步
     this.addRibbonIcon("refresh-cw", "OSS force sync", async () => {
       new Notice("OSS: 触发全量同步");
       await this.syncEngine.runOnce({ forceFull: true });
     });
 
-    // Vault 三监听器（决策 6.1、6.2 黑名单过滤在 syncEngine.enqueue 内）
     this.registerEvent(
       this.app.vault.on("create", (f: TAbstractFile) => {
-        if (f instanceof TFile) this.syncEngine.enqueue(normalizeRel(f.path));
+        if (f instanceof TFile && !this.syncEngine.isSuppressed(f.path)) {
+          this.syncEngine.enqueueUpsert(normalizeRel(f.path));
+        }
       })
     );
     this.registerEvent(
       this.app.vault.on("modify", (f: TAbstractFile) => {
-        if (f instanceof TFile) this.syncEngine.enqueue(normalizeRel(f.path));
+        if (f instanceof TFile && !this.syncEngine.isSuppressed(f.path)) {
+          this.syncEngine.enqueueUpsert(normalizeRel(f.path));
+        }
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (f: TAbstractFile) => {
-        if (f instanceof TFile) this.syncEngine.enqueue(normalizeRel(f.path));
+        if (f instanceof TFile && !this.syncEngine.isSuppressed(f.path)) {
+          this.syncEngine.enqueueDelete(normalizeRel(f.path));
+        } else if (f instanceof TFolder && !this.syncEngine.isSuppressed(f.path)) {
+          this.syncEngine.enqueueDeleteTree(normalizeRel(f.path));
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (f: TAbstractFile, oldPath: string) => {
+        if (f instanceof TFile && !this.syncEngine.isSuppressed(f.path)) {
+          this.syncEngine.enqueueRename(normalizeRel(oldPath), normalizeRel(f.path));
+        } else if (f instanceof TFolder) {
+          const newRoot = normalizeRel(f.path);
+          const oldRoot = normalizeRel(oldPath);
+          Vault.recurseChildren(f, (child) => {
+            if (!(child instanceof TFile) || this.syncEngine.isSuppressed(child.path)) return;
+            const suffix = normalizeRel(child.path).slice(newRoot.length).replace(/^\/+/, "");
+            const previousPath = suffix ? `${oldRoot}/${suffix}` : oldRoot;
+            this.syncEngine.enqueueRename(previousPath, normalizeRel(child.path));
+          });
+        }
       })
     );
 
-    // Phase 5：右键文件菜单「分享至轻博客」
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (file instanceof TFile || file instanceof TFolder) {
@@ -100,11 +115,24 @@ export default class OSSPlugin extends Plugin {
       })
     );
 
-    // 设置面板
     this.addSettingTab(new OSSSettingTab(this.app, this));
+
+    this.app.workspace.onLayoutReady(() => {
+      if (this.token) {
+        void this.ensureVaultBinding().then(() => {
+          if (this.settings.vaultId) {
+            void this.syncEngine.runOnce({ forceFull: true });
+          }
+        }).catch((error: unknown) => {
+          new Notice("OSS: 无法加载仓库列表 " + errorMessage(error));
+        });
+      }
+    });
   }
 
-  // --- 持久化 ---
+  onunload(): void {
+    this.syncEngine?.stop();
+  }
 
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
@@ -114,6 +142,17 @@ export default class OSSPlugin extends Plugin {
     } else {
       this.settings = Object.assign({}, DEFAULT_SETTINGS);
     }
+    if (!this.settings.clientId) {
+      this.settings.clientId =
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await this.saveSettings();
+    }
+    if (!this.settings.deviceName) {
+      this.settings.deviceName = `${this.app.vault.getName()} - Obsidian`;
+      await this.saveSettings();
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -121,21 +160,59 @@ export default class OSSPlugin extends Plugin {
     await this.saveData(data);
   }
 
-  // --- 鉴权（设置面板按钮调用） ---
-
   async login(): Promise<void> {
     const res = await this.api.login();
     this.token = res.token;
     await this.saveSettings();
+    await this.ensureVaultBinding();
   }
 
   async register(): Promise<void> {
     const res = await this.api.register();
     this.token = res.token;
     await this.saveSettings();
+    await this.ensureVaultBinding();
   }
 
-  // --- 状态栏 ---
+  async refreshVaults(): Promise<VaultOut[]> {
+    if (!this.api.hasToken()) {
+      this.availableVaults = [];
+      return [];
+    }
+    const result = await this.api.listVaults();
+    this.availableVaults = result.vaults;
+    return this.availableVaults;
+  }
+
+  async ensureVaultBinding(): Promise<void> {
+    const vaults = await this.refreshVaults();
+    if (vaults.length === 0) {
+      const created = await this.api.createVault("Default");
+      await this.bindVault(created);
+      return;
+    }
+    const current = vaults.find((vault) => vault.id === this.settings.vaultId);
+    if (current) {
+      this.settings.vaultName = current.name;
+      await this.saveSettings();
+      return;
+    }
+    await this.bindVault(vaults.find((vault) => vault.is_default) ?? vaults[0]);
+  }
+
+  async bindVault(vault: VaultOut): Promise<void> {
+    const changed = this.settings.vaultId !== vault.id;
+    this.settings.vaultId = vault.id;
+    this.settings.vaultName = vault.name;
+    await this.saveSettings();
+    await this.baseline.load();
+    if (this.baseline.bindVault(vault.id)) {
+      await this.baseline.save();
+    }
+    if (changed) {
+      await this.syncEngine.runOnce({ forceFull: true });
+    }
+  }
 
   setSyncState(state: SyncState, label?: string): void {
     if (!this.statusBarEl) return;
@@ -154,8 +231,6 @@ export default class OSSPlugin extends Plugin {
     }
   }
 
-  // --- Phase 5：冲突解决 ---
-
   openConflictModal(path: string): void {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
@@ -166,7 +241,16 @@ export default class OSSPlugin extends Plugin {
     void (async () => {
       let remote: string;
       try {
-        const res = await this.api.download(path);
+        const conflict = this.syncEngine.getConflict(path);
+        if (!conflict || conflict.remoteDeleted) {
+          new Notice("OSS: 该冲突无法使用文本 Diff 处理");
+          return;
+        }
+        const res = await this.api.downloadV2(
+          this.settings.vaultId,
+          path,
+          conflict.remoteRevision
+        );
         remote = new TextDecoder().decode(new Uint8Array(res.content));
       } catch (e) {
         new Notice("OSS: 拉取云端版本失败 " + (e as Error).message);
@@ -179,39 +263,15 @@ export default class OSSPlugin extends Plugin {
   }
 
   async applyConflictResolution(path: string, r: ConflictResolution): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) throw new Error("file vanished");
-
-    if (r === "accept_remote") {
-      const res = await this.api.download(path);
-      await this.app.vault.modifyBinary(file, res.content);
-      this.baseline.set(path, { serverMTime: res.mtime, hash: res.hash });
-      await this.baseline.save();
-    } else if (r === "force_local") {
-      const buf = await this.app.vault.readBinary(file);
-      const adjusted = this.api.getAdjustedMtime(file.stat.mtime);
-      const res = await this.api.upload(path, adjusted, buf);
-      this.baseline.set(path, { serverMTime: res.mtime, hash: res.hash });
-      await this.baseline.save();
-    } else {
-      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const parts = path.split("/");
-      const base = parts.pop()!.replace(/\.md$/i, "");
-      const ext = path.toLowerCase().endsWith(".md") ? ".md" : "";
-      const copyPath = [...parts, `${base}_conflict_${ts}${ext}`].join("/");
-      const localText = await this.app.vault.read(file);
-      const copyFile = await this.app.vault.create(copyPath, localText);
-      const res = await this.api.download(path);
-      await this.app.vault.modifyBinary(file, res.content);
-      this.baseline.set(path, { serverMTime: res.mtime, hash: res.hash });
-      await this.baseline.save();
-      this.syncEngine.enqueue(normalizeRel(copyFile.path));
-    }
-    this.syncEngine.dismissConflict(path);
+    await this.syncEngine.resolveConflict(path, r);
     new Notice(`OSS: 冲突已解决 (${r})`, 4000);
   }
 }
 
 function normalizeRel(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.\/+/, "");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
 }

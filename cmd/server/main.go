@@ -13,6 +13,7 @@ import (
 	"github.com/oss/oss-server/internal/config"
 	"github.com/oss/oss-server/internal/cron"
 	"github.com/oss/oss-server/internal/database"
+	"github.com/oss/oss-server/internal/reconcile"
 	"github.com/oss/oss-server/internal/server"
 )
 
@@ -31,9 +32,12 @@ func main() {
 	if err := database.AutoMigrate(db); err != nil {
 		log.Fatalf("AutoMigrate 失败: %v", err)
 	}
-
-	// Phase 3：首个 admin 通过 POST /api/auth/register（dev 环境空表放行）创建。
-	// 旧 SeedDevUser 已移除。
+	reconcileReport, err := reconcile.New(db, cfg).Run(true)
+	if err != nil {
+		log.Printf("[OSS] 启动存储对账失败: %v", err)
+	} else {
+		log.Printf("[OSS] 启动存储对账完成: %s", reconcileReport.String())
+	}
 
 	srv, err := server.New(cfg, db)
 	if err != nil {
@@ -47,7 +51,6 @@ func main() {
 		Handler: router,
 	}
 
-	// Phase 6：定时任务（回收站清理 + 孤儿附件清理，每日 03:00）。
 	sched := cron.NewScheduler(db, cfg)
 	sched.Register()
 	sched.Start()
@@ -64,7 +67,6 @@ func main() {
 		}
 	}()
 
-	// 优雅关闭
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

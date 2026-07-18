@@ -13,6 +13,7 @@ import (
 
 	"github.com/oss/oss-server/internal/config"
 	"github.com/oss/oss-server/internal/database"
+	"github.com/oss/oss-server/internal/filestore"
 	"github.com/oss/oss-server/internal/models"
 )
 
@@ -47,24 +48,21 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func TestPurgeRecycleBin_ExpiredDeleted(t *testing.T) {
+func TestCompactTombstones_RemovesLegacyDeletedContent(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	c, db, dataDir := setupCleanup(t, now)
 
 	db.Create(&models.User{ID: 1, Username: "u"})
-	days := 30
-	db.Create(&models.UserSetting{UserID: 1, RecycleBinDays: &days})
 
-	old := now.AddDate(0, 0, -31)
 	filePath := "Notes/Old.md"
 	abs := filepath.Join(dataDir, "1", "Notes", "Old.md")
 	writeFile(t, abs, "old content")
 	db.Create(&models.File{
 		UserID: 1, Path: filePath, Type: "markdown", Hash: "h", MTime: 1,
-		IsDeleted: true, DeletedAt: sqlNullTime(old),
+		IsDeleted: true, DeletedAt: sqlNullTime(now),
 	})
 
-	if err := c.PurgeRecycleBin(); err != nil {
+	if err := c.CompactTombstones(); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
@@ -78,56 +76,160 @@ func TestPurgeRecycleBin_ExpiredDeleted(t *testing.T) {
 	}
 }
 
-func TestPurgeRecycleBin_NotYetExpired(t *testing.T) {
+func TestCompactTombstones_DoesNotRetainRecentDeletion(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	c, db, dataDir := setupCleanup(t, now)
 
 	db.Create(&models.User{ID: 1, Username: "u"})
-	days := 30
-	db.Create(&models.UserSetting{UserID: 1, RecycleBinDays: &days})
 
-	recent := now.AddDate(0, 0, -5)
 	filePath := "Notes/Recent.md"
 	abs := filepath.Join(dataDir, "1", "Notes", "Recent.md")
 	writeFile(t, abs, "recent")
 	db.Create(&models.File{
 		UserID: 1, Path: filePath, Type: "markdown", Hash: "h", MTime: 1,
-		IsDeleted: true, DeletedAt: sqlNullTime(recent),
-	})
-
-	if err := c.PurgeRecycleBin(); err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-	if _, err := os.Stat(abs); err != nil {
-		t.Errorf("expected file kept (not expired), got err=%v", err)
-	}
-	var cnt int64
-	db.Unscoped().Model(&models.File{}).Where("path = ?", filePath).Count(&cnt)
-	if cnt != 1 {
-		t.Errorf("expected row kept, got %d", cnt)
-	}
-}
-
-func TestPurgeRecycleBin_ZeroDaysImmediate(t *testing.T) {
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	c, db, dataDir := setupCleanup(t, now)
-
-	db.Create(&models.User{ID: 1, Username: "u"})
-	zero := 0
-	db.Create(&models.UserSetting{UserID: 1, RecycleBinDays: &zero})
-
-	abs := filepath.Join(dataDir, "1", "x.md")
-	writeFile(t, abs, "x")
-	db.Create(&models.File{
-		UserID: 1, Path: "x.md", Type: "markdown", Hash: "h", MTime: 1,
 		IsDeleted: true, DeletedAt: sqlNullTime(now),
 	})
 
-	if err := c.PurgeRecycleBin(); err != nil {
+	if err := c.CompactTombstones(); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
-		t.Errorf("expected immediate purge, got err=%v", err)
+		t.Errorf("recently deleted content was retained: %v", err)
+	}
+	var cnt int64
+	db.Unscoped().Model(&models.File{}).Where("path = ?", filePath).Count(&cnt)
+	if cnt != 0 {
+		t.Errorf("legacy tombstone without devices was retained: %d", cnt)
+	}
+}
+
+func TestCompactTombstones_WithoutActiveDevices(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c, db, dataDir := setupCleanup(t, now)
+
+	user := models.User{ID: 1, Username: "u"}
+	db.Create(&user)
+	vault := models.Vault{ID: "vault-a", OwnerID: user.ID, Name: "A", IsDefault: true}
+	db.Create(&vault)
+
+	file := models.File{
+		UserID:     user.ID,
+		VaultID:    vault.ID,
+		Path:       "Notes/Deleted.md",
+		Type:       "markdown",
+		Hash:       "h",
+		Size:       7,
+		MTime:      1,
+		Revision:   3,
+		IsDeleted:  true,
+		DeletedAt:  sqlNullTime(now),
+		StorageKey: filestore.VaultStorageKey(vault.ID, "Notes/Deleted.md"),
+	}
+	abs := filestore.DiskPath(dataDir, file)
+	writeFile(t, abs, "deleted")
+	db.Create(&file)
+
+	if err := c.CompactTombstones(); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := os.Stat(abs); !os.IsNotExist(err) {
+		t.Fatalf("expected physical content removed, got %v", err)
+	}
+	var count int64
+	if err := db.Model(&models.File{}).Where("id = ?", file.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("tombstone was retained without any active device")
+	}
+	var state models.VaultSyncState
+	if err := db.Where("vault_id = ?", vault.ID).First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if state.CompactedRevision != file.Revision {
+		t.Fatalf("compacted revision=%d want %d", state.CompactedRevision, file.Revision)
+	}
+}
+
+func TestCompactTombstones_WaitsForDeviceAcknowledgement(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c, db, dataDir := setupCleanup(t, now)
+
+	user := models.User{ID: 1, Username: "u"}
+	db.Create(&user)
+	vault := models.Vault{ID: "vault-a", OwnerID: user.ID, Name: "A", IsDefault: true}
+	db.Create(&vault)
+	db.Create(&models.VaultSyncState{VaultID: vault.ID, HeadRevision: 3})
+	db.Create(&models.ClientDevice{
+		UserID: user.ID, ClientID: "device-a", LastSeenAt: now,
+	})
+	db.Create(&models.DeviceVault{
+		UserID: user.ID, ClientID: "device-a", VaultID: vault.ID, LastCursor: 2,
+	})
+
+	file := models.File{
+		UserID: user.ID, VaultID: vault.ID, Path: "Notes/Deleted.md",
+		Type: "markdown", Hash: "h", Size: 7, Revision: 3, IsDeleted: true,
+		DeletedAt:  sqlNullTime(now),
+		StorageKey: filestore.VaultStorageKey(vault.ID, "Notes/Deleted.md"),
+	}
+	abs := filestore.DiskPath(dataDir, file)
+	writeFile(t, abs, "deleted")
+	db.Create(&file)
+
+	if err := c.CompactTombstones(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(abs); !os.IsNotExist(err) {
+		t.Fatalf("expired physical content was not removed: %v", err)
+	}
+	var count int64
+	db.Model(&models.File{}).Where("id = ?", file.ID).Count(&count)
+	if count != 1 {
+		t.Fatal("unacknowledged tombstone was compacted")
+	}
+
+	db.Model(&models.DeviceVault{}).
+		Where("vault_id = ? AND client_id = ?", vault.ID, "device-a").
+		Update("last_cursor", 3)
+	if err := c.CompactTombstones(); err != nil {
+		t.Fatal(err)
+	}
+	db.Model(&models.File{}).Where("id = ?", file.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("acknowledged tombstone was not compacted")
+	}
+}
+
+func TestCompactTombstones_IgnoresStaleDevice(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c, db, _ := setupCleanup(t, now)
+	c.Cfg.Sync.DeviceStaleDays = 30
+
+	user := models.User{ID: 1, Username: "u"}
+	db.Create(&user)
+	vault := models.Vault{ID: "vault-a", OwnerID: user.ID, Name: "A", IsDefault: true}
+	db.Create(&vault)
+	db.Create(&models.VaultSyncState{VaultID: vault.ID, HeadRevision: 4})
+	db.Create(&models.ClientDevice{
+		UserID: user.ID, ClientID: "stale-device", LastSeenAt: now.AddDate(0, 0, -31),
+	})
+	db.Create(&models.DeviceVault{
+		UserID: user.ID, ClientID: "stale-device", VaultID: vault.ID, LastCursor: 0,
+	})
+	file := models.File{
+		UserID: user.ID, VaultID: vault.ID, Path: "Deleted.md", Type: "markdown",
+		Revision: 4, IsDeleted: true, DeletedAt: sqlNullTime(now),
+	}
+	db.Create(&file)
+
+	if err := c.CompactTombstones(); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.File{}).Where("id = ?", file.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("stale device incorrectly blocked compaction")
 	}
 }
 
@@ -188,6 +290,49 @@ func TestPurgeOrphanAttachments_GracePeriodKeepsNew(t *testing.T) {
 	}
 	if _, err := os.Stat(orphanAbs); err != nil {
 		t.Errorf("new orphan within 24h grace should be kept, got err=%v", err)
+	}
+}
+
+func TestPurgeOrphanAttachments_IsolatesVaultReferences(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c, db, dataDir := setupCleanup(t, now)
+
+	user := models.User{ID: 1, Username: "u"}
+	db.Create(&user)
+	vaultA := models.Vault{ID: "vault-a", OwnerID: user.ID, Name: "A", IsDefault: true}
+	vaultB := models.Vault{ID: "vault-b", OwnerID: user.ID, Name: "B"}
+	db.Create(&vaultA)
+	db.Create(&vaultB)
+
+	mdA := models.File{
+		UserID: user.ID, VaultID: vaultA.ID, Path: "Doc.md", Type: "markdown",
+		StorageKey: filestore.VaultStorageKey(vaultA.ID, "Doc.md"),
+	}
+	attachmentA := models.File{
+		UserID: user.ID, VaultID: vaultA.ID, Path: "asset.png", Type: "attachment",
+		StorageKey: filestore.VaultStorageKey(vaultA.ID, "asset.png"),
+	}
+	attachmentB := models.File{
+		UserID: user.ID, VaultID: vaultB.ID, Path: "asset.png", Type: "attachment",
+		StorageKey: filestore.VaultStorageKey(vaultB.ID, "asset.png"),
+	}
+	for _, file := range []*models.File{&mdA, &attachmentA, &attachmentB} {
+		db.Create(file)
+	}
+	writeFile(t, filestore.DiskPath(dataDir, mdA), "![](asset.png)")
+	writeFile(t, filestore.DiskPath(dataDir, attachmentA), "a")
+	writeFile(t, filestore.DiskPath(dataDir, attachmentB), "b")
+	setFileMtime(t, filestore.DiskPath(dataDir, attachmentA), now.Add(-48*time.Hour))
+	setFileMtime(t, filestore.DiskPath(dataDir, attachmentB), now.Add(-48*time.Hour))
+
+	if err := c.PurgeOrphanAttachments(); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := os.Stat(filestore.DiskPath(dataDir, attachmentA)); err != nil {
+		t.Fatalf("referenced attachment in vault A was removed: %v", err)
+	}
+	if _, err := os.Stat(filestore.DiskPath(dataDir, attachmentB)); !os.IsNotExist(err) {
+		t.Fatalf("orphan in vault B was retained: %v", err)
 	}
 }
 

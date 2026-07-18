@@ -1,4 +1,3 @@
-/* OSS Plugin styles — Phase 3 minimal */
 .oss-status-bar {
   display: flex;
   align-items: center;
@@ -8,7 +7,6 @@
 .oss-status-bar.is-syncing { opacity: 0.7; }
 .oss-status-bar.is-error { color: var(--text-error); }
 
-/* Phase 5: 冲突 Diff Modal 预留 */
 .oss-conflict-modal .diff-pane {
   font-family: var(--font-monospace);
   font-size: 12px;

@@ -17,10 +17,10 @@ import (
 
 var (
 	ErrInvalidToken = errors.New("invalid jwt token")
-	ErrExpired     = errors.New("jwt token expired")
+	ErrExpired      = errors.New("jwt token expired")
 )
 
-// Claims 是 JWT 的负载。Phase 3 仅用 sub=user_id、username、role。
+// Claims 是 JWT 的负载。
 type Claims struct {
 	UserID   uint   `json:"uid"`
 	Username string `json:"username"`

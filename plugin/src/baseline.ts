@@ -1,98 +1,217 @@
-// 基线管理 — 决策 1。
-//
-// 在 vault 根维护本地基线文件 .oss-sync-state.json：
-//   { "<vault相对路径>": { "serverMTime": <int>, "hash": <string> } }
-//
-// 仅在某文件成功 upload 或 download 完成后，用服务端返回的最新 mtime/hash
-// 覆盖该路径条目。失败、冲突未解决期间不得更新基线。
-//
-// 首次同步：本地无基线条目时，视为 download_needed（拉服务端 mtime 建基线）；
-// 若服务端也无记录，视为 upload_needed（上传后建立基线）。
-//
-// 已知限制：基线是设备本地文件，同一用户在多台设备编辑时，第二台设备的基线
-// 没有第一台写入的服务端 mtime，多设备冲突检测会退化（详见决策 1 末尾注释）。
-// 我们不在客户端对此做兜底——服务端 LWW 直接覆盖是已知妥协。
-
 import type { Vault } from "obsidian";
-import { TFile } from "obsidian";
 
 export const BASELINE_FILENAME = ".oss-sync-state.json";
 
 export interface BaselineEntry {
-  serverMTime: number;
-  hash: string;
+  serverRevision: number;
+  serverHash: string;
+  serverDeleted: boolean;
+  localHash: string;
+  localMTime: number;
+  localSize: number;
 }
 
-export type BaselineMap = Record<string, BaselineEntry>;
+export interface PendingOperation {
+  id: string;
+  kind: "upsert" | "delete" | "rename";
+  path: string;
+  oldPath?: string;
+  createdAt: number;
+}
+
+export interface ConflictEntry {
+  path: string;
+  localHash: string;
+  remoteRevision: number;
+  remoteHash: string;
+  remoteDeleted: boolean;
+  remoteMTime: number;
+  remoteSize: number;
+  remoteType: "markdown" | "attachment" | "config";
+  detectedAt: number;
+}
+
+interface SyncStateFile {
+  version: 2;
+  vaultId: string;
+  cursor: number;
+  files: Record<string, BaselineEntry>;
+  pending: PendingOperation[];
+  conflicts: ConflictEntry[];
+}
+
+function emptyState(): SyncStateFile {
+  return {
+    version: 2,
+    vaultId: "",
+    cursor: 0,
+    files: {},
+    pending: [],
+    conflicts: [],
+  };
+}
 
 export class BaselineStore {
-  private data: BaselineMap = {};
+  private data: SyncStateFile = emptyState();
   private loaded = false;
+  private loadPromise: Promise<void> | null = null;
+  private saveChain: Promise<void> = Promise.resolve();
 
   constructor(private vault: Vault) {}
 
-  /** 加载基线文件，文件不存在时视为空 map。 */
   async load(): Promise<void> {
-    let tf = this.vault.getAbstractFileByPath(BASELINE_FILENAME);
-    if (!tf || !(tf instanceof TFile)) {
-      this.data = {};
-      this.loaded = true;
-      return;
+    if (this.loaded) return;
+    if (!this.loadPromise) {
+      this.loadPromise = this.loadFromAdapter();
     }
-    const raw = await this.vault.read(tf as TFile);
+    await this.loadPromise;
+  }
+
+  private async loadFromAdapter(): Promise<void> {
     try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        this.data = parsed as BaselineMap;
+      if (!(await this.vault.adapter.exists(BASELINE_FILENAME))) {
+        this.data = emptyState();
+        return;
+      }
+      const parsed = JSON.parse(await this.vault.adapter.read(BASELINE_FILENAME));
+      if (parsed?.version === 2 && typeof parsed.files === "object") {
+        this.data = {
+          ...emptyState(),
+          ...parsed,
+          files: parsed.files ?? {},
+          pending: Array.isArray(parsed.pending) ? parsed.pending : [],
+          conflicts: Array.isArray(parsed.conflicts) ? parsed.conflicts : [],
+        };
       } else {
-        this.data = {};
+        this.data = emptyState();
       }
     } catch {
-      this.data = {};
+      this.data = emptyState();
+    } finally {
+      this.loaded = true;
     }
-    this.loaded = true;
   }
 
-  /** 持久化基线文件。会创建隐藏文件（Obsidian 默认隐藏 .开头）。 */
   async save(): Promise<void> {
-    const raw = JSON.stringify(this.data, null, 2);
-    let tf = this.vault.getAbstractFileByPath(BASELINE_FILENAME);
-    if (!tf || !(tf instanceof TFile)) {
-      try {
-        await this.vault.create(BASELINE_FILENAME, raw);
-      } catch (error: unknown) {
-        tf = this.vault.getAbstractFileByPath(BASELINE_FILENAME);
-        if (!(tf instanceof TFile)) throw error;
-        await this.vault.modify(tf, raw);
-      }
-      return;
-    }
-    await this.vault.modify(tf as TFile, raw);
+    await this.load();
+    const raw = JSON.stringify(this.data);
+    const pending = this.saveChain.then(() =>
+      this.vault.adapter.write(BASELINE_FILENAME, raw)
+    );
+    this.saveChain = pending.catch(() => undefined);
+    await pending;
   }
 
-  /** 取某路径的基线条目，未存在返回 null。 */
+  bindVault(vaultID: string): boolean {
+    if (this.data.vaultId === vaultID) return false;
+    this.data = emptyState();
+    this.data.vaultId = vaultID;
+    return true;
+  }
+
+  getVaultID(): string {
+    return this.data.vaultId;
+  }
+
+  getCursor(): number {
+    return this.data.cursor;
+  }
+
+  setCursor(cursor: number): void {
+    this.data.cursor = Math.max(this.data.cursor, cursor);
+  }
+
   get(path: string): BaselineEntry | null {
-    return this.data[normalizePath(path)] ?? null;
+    return this.data.files[normalizePath(path)] ?? null;
   }
 
-  /** 覆盖某路径的基线（仅 upload/download 成功后调用）。 */
   set(path: string, entry: BaselineEntry): void {
-    this.data[normalizePath(path)] = entry;
+    this.data.files[normalizePath(path)] = entry;
   }
 
-  /** 清除某路径的基线条目（删除文件时同步清除）。 */
-  delete(path: string): void {
-    delete this.data[normalizePath(path)];
+  remove(path: string): void {
+    delete this.data.files[normalizePath(path)];
   }
 
-  /** 全量覆盖。Phase 3 暂不导出，Phase 5 用得到。 */
-  _all(): BaselineMap {
-    return this.data;
+  paths(): string[] {
+    return Object.keys(this.data.files);
+  }
+
+  pending(): PendingOperation[] {
+    return [...this.data.pending];
+  }
+
+  putPending(operation: PendingOperation): void {
+    const path = normalizePath(operation.path);
+    const oldPath = operation.oldPath ? normalizePath(operation.oldPath) : undefined;
+
+    if (operation.kind === "upsert") {
+      const rename = this.data.pending.find((item) => item.kind === "rename" && item.path === path);
+      if (rename) return;
+    }
+    if (operation.kind === "delete") {
+      const rename = this.data.pending.find((item) => item.kind === "rename" && item.path === path);
+      if (rename?.oldPath) {
+        this.data.pending = this.data.pending.filter((item) => item.id !== rename.id);
+        this.data.pending.push({
+          ...operation,
+          path: rename.oldPath,
+        });
+        return;
+      }
+    }
+    if (operation.kind === "rename" && oldPath) {
+      const previousRename = this.data.pending.find(
+        (item) => item.kind === "rename" && item.path === oldPath
+      );
+      if (previousRename?.oldPath) {
+        this.data.pending = this.data.pending.filter((item) => item.id !== previousRename.id);
+        operation = { ...operation, oldPath: previousRename.oldPath };
+      }
+    }
+
+    this.data.pending = this.data.pending.filter((item) => {
+      if (operation.kind === "rename") {
+        return item.path !== path && item.path !== operation.oldPath;
+      }
+      return item.path !== path;
+    });
+    this.data.pending.push({
+      ...operation,
+      path,
+      oldPath: operation.oldPath ? normalizePath(operation.oldPath) : undefined,
+    });
+  }
+
+  removePending(operationID: string): void {
+    this.data.pending = this.data.pending.filter((item) => item.id !== operationID);
+  }
+
+  removePendingForPath(path: string): void {
+    const normalized = normalizePath(path);
+    this.data.pending = this.data.pending.filter(
+      (item) => item.path !== normalized && item.oldPath !== normalized
+    );
+  }
+
+  conflicts(): ConflictEntry[] {
+    return [...this.data.conflicts];
+  }
+
+  putConflict(conflict: ConflictEntry): void {
+    this.data.conflicts = this.data.conflicts.filter((item) => item.path !== conflict.path);
+    this.data.conflicts.push({ ...conflict, path: normalizePath(conflict.path) });
+  }
+
+  removeConflict(path: string): void {
+    this.data.conflicts = this.data.conflicts.filter((item) => item.path !== normalizePath(path));
+  }
+
+  getConflict(path: string): ConflictEntry | null {
+    return this.data.conflicts.find((item) => item.path === normalizePath(path)) ?? null;
   }
 }
 
-// Obsidian 的 TAbstractFile.path 已经是 vault 内相对路径，且用 / 分隔。
-// 这里仅做安全归一化，确保与黑名单、check 请求路径一致。
-export function normalizePath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\.\/+/, "");
+export function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\/+/, "");
 }

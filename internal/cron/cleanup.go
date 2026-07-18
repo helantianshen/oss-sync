@@ -2,18 +2,20 @@ package cron
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/oss/oss-server/internal/config"
+	"github.com/oss/oss-server/internal/devices"
+	"github.com/oss/oss-server/internal/filestore"
 	"github.com/oss/oss-server/internal/models"
+	"github.com/oss/oss-server/internal/synclock"
 )
 
 type Cleanup struct {
@@ -26,66 +28,111 @@ func NewCleanup(db *gorm.DB, cfg *config.Config) *Cleanup {
 	return &Cleanup{DB: db, Cfg: cfg, now: time.Now}
 }
 
-// PurgeRecycleBin implements PRD 二、3.1.
-// For each soft-deleted File whose deleted_at is older than the owning user's
-// RecycleBinDays (0 = immediate), physically remove the disk file and hard
-// delete the DB row.
-func (c *Cleanup) PurgeRecycleBin() error {
-	var users []models.User
-	if err := c.DB.Find(&users).Error; err != nil {
+// CompactTombstones 清理已删除文件的残留正文，并在所有活跃设备确认后删除墓碑。
+func (c *Cleanup) CompactTombstones() error {
+	type vaultOwner struct {
+		UserID  uint
+		VaultID string
+	}
+	var owners []vaultOwner
+	if err := c.DB.Model(&models.File{}).
+		Where("is_deleted = ?", true).
+		Distinct("user_id", "vault_id").
+		Find(&owners).Error; err != nil {
 		return err
 	}
 	now := c.now()
-	for _, u := range users {
-		days, err := c.recycleBinDays(u.ID)
+	for _, owner := range owners {
+		lockKey := owner.VaultID
+		if lockKey == "" {
+			lockKey = "legacy-user-" + strconv.FormatUint(uint64(owner.UserID), 10)
+		}
+		vaultLock := synclock.Vault(lockKey)
+		vaultLock.Lock()
+		err := c.compactTombstonesForVault(owner.UserID, owner.VaultID, now)
+		vaultLock.Unlock()
 		if err != nil {
 			return err
-		}
-		var files []models.File
-		q := c.DB.Where("user_id = ? AND is_deleted = ?", u.ID, true)
-		if days > 0 {
-			threshold := now.AddDate(0, 0, -days)
-			q = q.Where("deleted_at IS NOT NULL AND deleted_at < ?", threshold)
-		}
-		if err := q.Find(&files).Error; err != nil {
-			return err
-		}
-		for _, f := range files {
-			abs := filepath.Join(c.Cfg.Storage.DataDir, fmt.Sprintf("%d", u.ID), f.Path)
-			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			if err := c.DB.Unscoped().Delete(&f).Error; err != nil {
-				return err
-			}
 		}
 	}
 	return nil
 }
 
-func (c *Cleanup) recycleBinDays(userID uint) (int, error) {
-	var us models.UserSetting
-	err := c.DB.Where("user_id = ?", userID).First(&us).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return 30, nil
+func (c *Cleanup) compactTombstonesForVault(userID uint, vaultID string, now time.Time) error {
+	safeCursor := int64(0)
+	var state models.VaultSyncState
+	if vaultID != "" {
+		err := c.DB.Where("vault_id = ?", vaultID).First(&state).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			state = models.VaultSyncState{VaultID: vaultID}
+			if err := c.DB.Create(&state).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		var maxRevision int64
+		if err := c.DB.Model(&models.File{}).Where("vault_id = ?", vaultID).
+			Select("COALESCE(MAX(revision), 0)").Scan(&maxRevision).Error; err != nil {
+			return err
+		}
+		if maxRevision > state.HeadRevision {
+			state.HeadRevision = maxRevision
+			if err := c.DB.Model(&models.VaultSyncState{}).Where("vault_id = ?", vaultID).
+				Update("head_revision", maxRevision).Error; err != nil {
+				return err
+			}
+		}
+		staleBefore := now.AddDate(0, 0, -c.Cfg.Sync.EffectiveDeviceStaleDays())
+		minCursor, activeDevices, err := devices.MinActiveCursor(c.DB, vaultID, staleBefore)
+		if err != nil {
+			return err
+		}
+		if activeDevices == 0 {
+			safeCursor = state.HeadRevision
+		} else {
+			safeCursor = minCursor
+		}
 	}
-	if err != nil {
-		return 0, err
-	}
-	if us.RecycleBinDays == nil {
-		return 30, nil
-	}
-	d := *us.RecycleBinDays
-	if d < 0 {
-		return 30, nil
-	}
-	return d, nil
+
+	maxCompacted := state.CompactedRevision
+	return c.DB.Transaction(func(tx *gorm.DB) error {
+		var files []models.File
+		if err := tx.Where(
+			"user_id = ? AND vault_id = ? AND is_deleted = ?",
+			userID,
+			vaultID,
+			true,
+		).Find(&files).Error; err != nil {
+			return err
+		}
+		for _, f := range files {
+			abs := filestore.DiskPath(c.Cfg.Storage.DataDir, f)
+			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if f.Revision > 0 && f.Revision > safeCursor {
+				continue
+			}
+			if err := tx.Unscoped().Delete(&f).Error; err != nil {
+				return err
+			}
+			if f.Revision > maxCompacted {
+				maxCompacted = f.Revision
+			}
+		}
+		if vaultID != "" && maxCompacted > state.CompactedRevision {
+			return tx.Model(&models.VaultSyncState{}).Where("vault_id = ?", vaultID).
+				Updates(map[string]any{
+					"compacted_revision": maxCompacted,
+					"updated_at":         now,
+				}).Error
+		}
+		return nil
+	})
 }
 
-// PurgeOrphanAttachments implements PRD 二、3.2 + decision 6.3.
-// Scans every non-deleted markdown file, extracts referenced attachment paths
-// covering all 4 reference types, then deletes on-disk attachment files that
-// are not referenced and older than 24h (decision 6.3 new-file grace period).
+// PurgeOrphanAttachments 清理超过宽限期且未被引用的旧版附件。
 func (c *Cleanup) PurgeOrphanAttachments() error {
 	var users []models.User
 	if err := c.DB.Find(&users).Error; err != nil {
@@ -93,24 +140,34 @@ func (c *Cleanup) PurgeOrphanAttachments() error {
 	}
 	now := c.now()
 	for _, u := range users {
-		if err := c.purgeOrphansForUser(u.ID, now); err != nil {
+		var vaultIDs []string
+		if err := c.DB.Model(&models.File{}).
+			Where("user_id = ? AND is_deleted = ?", u.ID, false).
+			Distinct("vault_id").
+			Pluck("vault_id", &vaultIDs).Error; err != nil {
 			return err
+		}
+		for _, vaultID := range vaultIDs {
+			if err := c.purgeOrphansForVault(u.ID, vaultID, now); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (c *Cleanup) purgeOrphansForUser(userID uint, now time.Time) error {
+func (c *Cleanup) purgeOrphansForVault(userID uint, vaultID string, now time.Time) error {
 	var mdFiles []models.File
-	if err := c.DB.Where("user_id = ? AND is_deleted = ? AND type = ?",
-		userID, false, "markdown").Find(&mdFiles).Error; err != nil {
+	if err := c.DB.Where(
+		"user_id = ? AND vault_id = ? AND is_deleted = ? AND type = ?",
+		userID, vaultID, false, "markdown",
+	).Find(&mdFiles).Error; err != nil {
 		return err
 	}
 
 	referenced := make(map[string]struct{})
-	userDir := filepath.Join(c.Cfg.Storage.DataDir, fmt.Sprintf("%d", userID))
 	for _, f := range mdFiles {
-		abs := filepath.Join(userDir, f.Path)
+		abs := filestore.DiskPath(c.Cfg.Storage.DataDir, f)
 		raw, err := os.ReadFile(abs)
 		if err != nil {
 			continue
@@ -121,18 +178,24 @@ func (c *Cleanup) purgeOrphansForUser(userID uint, now time.Time) error {
 	}
 
 	var attachments []models.File
-	if err := c.DB.Where("user_id = ? AND is_deleted = ? AND type = ?",
-		userID, false, "attachment").Find(&attachments).Error; err != nil {
+	if err := c.DB.Where(
+		"user_id = ? AND vault_id = ? AND is_deleted = ? AND type = ?",
+		userID, vaultID, false, "attachment",
+	).Find(&attachments).Error; err != nil {
 		return err
 	}
 
 	grace := 24 * time.Hour
 	for _, a := range attachments {
+		// 已进入 revision 协议的附件必须走同步删除，确保其他设备收到墓碑。
+		if a.Revision > 0 {
+			continue
+		}
 		norm := normalizeRel(a.Path)
 		if _, ok := referenced[norm]; ok {
 			continue
 		}
-		abs := filepath.Join(userDir, a.Path)
+		abs := filestore.DiskPath(c.Cfg.Storage.DataDir, a)
 		st, err := os.Stat(abs)
 		if err != nil {
 			continue
@@ -150,9 +213,7 @@ func (c *Cleanup) purgeOrphansForUser(userID uint, now time.Time) error {
 	return nil
 }
 
-// extractAttachmentRefs implements decision 6.3 — must cover all 4 reference
-// types: standard MD image, Obsidian wikilink image, YAML frontmatter image,
-// and HTML <img>. Returned paths are normalized relative to user root.
+// extractAttachmentRefs 提取 Markdown、Obsidian、frontmatter 和 HTML 中的附件引用。
 func extractAttachmentRefs(content, mdPath string) []string {
 	refs := map[string]struct{}{}
 	dir := path.Dir(mdPath)
@@ -187,13 +248,13 @@ func extractAttachmentRefs(content, mdPath string) []string {
 }
 
 var (
-	mdImageRe      = regexp.MustCompile(`!\[.*?\]\((.+?)\)`)
+	mdImageRe       = regexp.MustCompile(`!\[.*?\]\((.+?)\)`)
 	obsidianImageRe = regexp.MustCompile(`!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]`)
-	htmlImgRe      = regexp.MustCompile(`<img[^>]+src=["'](.+?)["']`)
-	yamlImageRe    = regexp.MustCompile(`(?m)^\s*(?:cover|image|banner|thumbnail)\s*:\s*(\S+)`)
+	htmlImgRe       = regexp.MustCompile(`<img[^>]+src=["'](.+?)["']`)
+	yamlImageRe     = regexp.MustCompile(`(?m)^\s*(?:cover|image|banner|thumbnail)\s*:\s*(\S+)`)
 )
 
-// splitFrontmatter splits the leading `---\n...\n---` block from the body.
+// splitFrontmatter 分离文档开头的 frontmatter。
 func splitFrontmatter(content string) (frontmatter, body string) {
 	if !strings.HasPrefix(content, "---\n") && !strings.HasPrefix(content, "---\r\n") {
 		return "", content
@@ -212,8 +273,7 @@ func splitFrontmatter(content string) (frontmatter, body string) {
 	return fm, body
 }
 
-// resolveRel resolves a relative path against the markdown file's directory,
-// collapsing `./` and `../` segments, returning a slash-separated path.
+// resolveRel 以 Markdown 文件所在目录为基准解析附件路径。
 func resolveRel(dir, ref string) string {
 	if strings.HasPrefix(ref, "/") {
 		return strings.TrimPrefix(ref, "/")

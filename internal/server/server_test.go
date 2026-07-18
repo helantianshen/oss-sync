@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/oss/oss-server/internal/config"
 	"github.com/oss/oss-server/internal/database"
+	"github.com/oss/oss-server/internal/filestore"
+	"github.com/oss/oss-server/internal/models"
 )
 
 func newTestServer(t *testing.T) (*Server, *gorm.DB, string) {
@@ -128,12 +131,10 @@ func intToStr(n int64) string {
 
 func TestFullSyncFlow(t *testing.T) {
 	srv, db, dataDir := newTestServer(t)
-	_ = db
 	router := srv.Router()
 
 	token := registerAndLogin(t, router, "alice", "password123")
 
-	// upload
 	code, body := uploadFile(t, router, token, "Notes/Go.md", "# Go\nHello [[World]]", 1700000000000)
 	if code != http.StatusOK {
 		t.Fatalf("upload: %d %v", code, body)
@@ -142,13 +143,15 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Errorf("upload response unexpected: %v", body)
 	}
 
-	// disk file exists
-	abs := filepath.Join(dataDir, "1", "Notes", "Go.md")
+	var stored models.File
+	if err := db.Where("user_id = ? AND path = ?", 1, "Notes/Go.md").First(&stored).Error; err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+	abs := filestore.DiskPath(dataDir, stored)
 	if _, err := os.Stat(abs); err != nil {
 		t.Errorf("disk file missing: %v", err)
 	}
 
-	// check (full) — server mtime == uploaded, should be in_sync
 	code, body = doJSON(t, router, "POST", "/api/sync/check", token, map[string]any{
 		"mode": "full",
 		"files": []map[string]any{
@@ -168,7 +171,6 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Errorf("expected in_sync, got %v", status)
 	}
 
-	// check with older client mtime → download_needed
 	code, body = doJSON(t, router, "POST", "/api/sync/check", token, map[string]any{
 		"mode": "full",
 		"files": []map[string]any{
@@ -181,7 +183,6 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Errorf("expected conflict_detected, got %v", status)
 	}
 
-	// download
 	req := httptest.NewRequest("GET", "/api/sync/download?path=Notes/Go.md", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
@@ -196,12 +197,13 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Error("missing X-OSS-Hash header")
 	}
 
-	// soft delete
 	code, _ = doJSON(t, router, "POST", "/api/sync/delete", token, map[string]string{"path": "Notes/Go.md"})
 	if code != http.StatusNoContent {
 		t.Errorf("delete: %d", code)
 	}
-	// download after delete → 410
+	if _, err := os.Stat(abs); !os.IsNotExist(err) {
+		t.Errorf("deleted content remains on disk: %v", err)
+	}
 	req = httptest.NewRequest("GET", "/api/sync/download?path=Notes/Go.md", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w = httptest.NewRecorder()
@@ -260,5 +262,36 @@ func TestHealthzAndReadyz(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("readyz: %d", w.Code)
+	}
+}
+
+func TestReadyzReportsUnresolvedStorageIssues(t *testing.T) {
+	srv, db, _ := newTestServer(t)
+	issue := models.StorageIssue{
+		VaultID:     "vault-a",
+		StorageKey:  "vaults/vault-a/files/Missing.md",
+		Kind:        "missing",
+		Detail:      "missing",
+		FirstSeenAt: time.Now(),
+		LastSeenAt:  time.Now(),
+	}
+	if err := db.Create(&issue).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response := httptest.NewRecorder()
+	srv.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz with issue=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := db.Model(&models.StorageIssue{}).Where("id = ?", issue.ID).
+		Update("resolved_at", time.Now()).Error; err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response = httptest.NewRecorder()
+	srv.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("readyz after resolution=%d body=%s", response.Code, response.Body.String())
 	}
 }
