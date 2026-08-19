@@ -319,6 +319,28 @@ func (h *Handler) userLang(c *gin.Context) string {
 }
 
 func requestedWebLanguage(c *gin.Context) string {
+	accept := c.GetHeader("Accept-Language")
+	if accept == "" {
+		return ""
+	}
+	for _, part := range strings.Split(accept, ",") {
+		// 每段形如 "zh-CN;q=0.9" 或 "en"。
+		tag := part
+		if idx := strings.Index(part, ";"); idx >= 0 {
+			tag = part[:idx]
+		}
+		tag = strings.TrimSpace(tag)
+		// 取主语言子标签：zh-CN → zh, en-US → en。
+		if idx := strings.Index(tag, "-"); idx > 0 {
+			tag = tag[:idx]
+		}
+		switch strings.ToLower(tag) {
+		case "zh":
+			return "zh"
+		case "en":
+			return "en"
+		}
+	}
 	return ""
 }
 

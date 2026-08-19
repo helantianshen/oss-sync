@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -218,4 +219,67 @@ func lcsDiff(oldLines, newLines []string) []string {
 // CleanupVault 删除某仓库的全部历史快照文件。
 func CleanupVault(dataDir, vaultID string) error {
 	return os.RemoveAll(Dir(dataDir, vaultID))
+}
+
+// CleanupExpired 删除超过保留期的文件历史记录及其快照文件。
+// retentionDays 为 0 时不清理。删除快照文件前会确认没有其他记录引用同一 ContentKey。
+func CleanupExpired(db *gorm.DB, dataDir, vaultID string, retentionDays int, now time.Time) error {
+	if retentionDays <= 0 {
+		return nil
+	}
+	cutoff := now.AddDate(0, 0, -retentionDays)
+
+	// 查找过期的历史记录。
+	var expired []models.FileHistory
+	if err := db.Where("vault_id = ? AND created_at < ?", vaultID, cutoff).
+		Find(&expired).Error; err != nil {
+		return err
+	}
+	if len(expired) == 0 {
+		return nil
+	}
+
+	// 收集待删除的 ContentKey，检查是否被未过期记录引用。
+	keysToDelete := make(map[string]struct{})
+	for _, h := range expired {
+		if h.ContentKey == "" {
+			continue
+		}
+		keysToDelete[h.ContentKey] = struct{}{}
+	}
+	if len(keysToDelete) > 0 {
+		keys := make([]string, 0, len(keysToDelete))
+		for k := range keysToDelete {
+			keys = append(keys, k)
+		}
+		// 排除被未过期记录引用的 ContentKey。
+		var stillReferenced []string
+		if err := db.Model(&models.FileHistory{}).
+			Where("vault_id = ? AND content_key IN ? AND created_at >= ?", vaultID, keys, cutoff).
+			Distinct("content_key").
+			Pluck("content_key", &stillReferenced).Error; err != nil {
+			return err
+		}
+		for _, k := range stillReferenced {
+			delete(keysToDelete, k)
+		}
+	}
+
+	// 删除数据库记录。
+	ids := make([]uint, len(expired))
+	for i, h := range expired {
+		ids[i] = h.ID
+	}
+	if err := db.Where("id IN ?", ids).Delete(&models.FileHistory{}).Error; err != nil {
+		return err
+	}
+
+	// 删除无引用的快照文件。
+	for k := range keysToDelete {
+		diskPath := DiskPath(dataDir, k)
+		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }

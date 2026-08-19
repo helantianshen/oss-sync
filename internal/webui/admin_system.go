@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	hardMaxLongPollWaitSec = 30
-	hardMaxSyncDebounceSec = 3600
-	hardMaxRecycleBinDays  = 3650
-	bytesPerMegabyte       = int64(1 << 20)
+	hardMaxLongPollWaitSec      = 30
+	hardMaxSyncDebounceSec      = 3600
+	hardMaxRecycleBinDays       = 3650
+	hardMaxHistoryRetentionDays = 3650
+	bytesPerMegabyte            = int64(1 << 20)
 )
 
 type adminSystemData struct {
@@ -31,6 +32,7 @@ type adminSystemData struct {
 	MaxLongPollWaitSec     int
 	MaxSyncDebounceSec     int
 	MaxRecycleBinDays      int
+	HistoryRetentionDays   int
 	MaxVaultStorageMB      int64
 	MaxUploadSizeMB        int64
 	ConfigMaxUploadSizeMB  int64
@@ -55,6 +57,7 @@ type adminSystemInput struct {
 	MaxLongPollWaitSec     int
 	MaxSyncDebounceSec     int
 	MaxRecycleBinDays      int
+	HistoryRetentionDays   int
 	MaxVaultStorageBytes   int64
 	MaxUploadSizeBytes     int64
 }
@@ -94,6 +97,7 @@ func (h *Handler) adminSystemPage(c *gin.Context) {
 	data.MaxLongPollWaitSec = limits.LongPollWaitSec
 	data.MaxSyncDebounceSec = limits.SyncDebounceSec
 	data.MaxRecycleBinDays = limits.RecycleBinDays
+	data.HistoryRetentionDays = limits.HistoryRetentionDays
 	data.MaxVaultStorageMB = limits.VaultStorageBytes / bytesPerMegabyte
 	data.MaxUploadSizeMB = limits.UploadSizeBytes / bytesPerMegabyte
 	data.ConfigMaxUploadSizeMB = configUploadBytes / bytesPerMegabyte
@@ -182,6 +186,7 @@ func (h *Handler) adminSaveSystem(c *gin.Context) {
 			"max_long_poll_wait_sec":   input.MaxLongPollWaitSec,
 			"max_sync_debounce_sec":    input.MaxSyncDebounceSec,
 			"max_recycle_bin_days":     input.MaxRecycleBinDays,
+			"history_retention_days":   input.HistoryRetentionDays,
 			"max_vault_storage_bytes":  input.MaxVaultStorageBytes,
 			"max_upload_size_bytes":    input.MaxUploadSizeBytes,
 		}).Error
@@ -223,6 +228,10 @@ func parseAdminSystemInput(form url.Values, configMaxUploadBytes int64) (adminSy
 	if err != nil {
 		return adminSystemInput{}, err
 	}
+	historyRetention, err := parseSystemInteger(form, "history_retention_days")
+	if err != nil {
+		return adminSystemInput{}, err
+	}
 	maxVaultMB, err := parseSystemInteger(form, "max_vault_storage_mb")
 	if err != nil {
 		return adminSystemInput{}, err
@@ -239,6 +248,8 @@ func parseAdminSystemInput(form url.Values, configMaxUploadBytes int64) (adminSy
 		return adminSystemInput{}, invalidSystemField("max_sync_debounce_sec", "必须为 3-3600 秒")
 	case maxRecycle < 1 || maxRecycle > hardMaxRecycleBinDays:
 		return adminSystemInput{}, invalidSystemField("max_recycle_bin_days", "必须为 1-3650 天")
+	case historyRetention < 0 || historyRetention > hardMaxHistoryRetentionDays:
+		return adminSystemInput{}, invalidSystemField("history_retention_days", "必须为 0-3650 天")
 	case defaultRecycle < 1 || defaultRecycle > maxRecycle:
 		return adminSystemInput{}, invalidSystemField("default_recycle_bin_days", "不得超过回收站保留上限")
 	case maxVaultMB < 0:
@@ -251,8 +262,9 @@ func parseAdminSystemInput(form url.Values, configMaxUploadBytes int64) (adminSy
 		SyncMode:               syncMode,
 		DefaultRecycleBinDays:  int(defaultRecycle),
 		MaxLongPollWaitSec:     int(maxLongPoll),
-		MaxSyncDebounceSec:     int(maxDebounce),
 		MaxRecycleBinDays:      int(maxRecycle),
+		HistoryRetentionDays:   int(historyRetention),
+		MaxSyncDebounceSec:     int(maxDebounce),
 		MaxVaultStorageBytes:   maxVaultMB * bytesPerMegabyte,
 		MaxUploadSizeBytes:     maxUploadMB * bytesPerMegabyte,
 	}, nil

@@ -13,14 +13,16 @@ const (
 	defaultUploadSizeBytes = int64(100 << 20)
 	hardMaxDebounceSec     = 3600
 	hardMaxRecycleBinDays  = 3650
+	hardMaxHistoryDays     = 3650
 )
 
 type Limits struct {
-	LongPollWaitSec   int
-	SyncDebounceSec   int
-	RecycleBinDays    int
-	VaultStorageBytes int64
-	UploadSizeBytes   int64
+	LongPollWaitSec      int
+	SyncDebounceSec      int
+	RecycleBinDays       int
+	HistoryRetentionDays int
+	VaultStorageBytes    int64
+	UploadSizeBytes      int64
 }
 
 type Preferences struct {
@@ -59,11 +61,12 @@ func LimitsFor(system models.SystemSetting, configUploadBytes int64) Limits {
 		uploadLimit = system.MaxUploadSizeBytes
 	}
 	return Limits{
-		LongPollWaitSec:   bounded(system.MaxLongPollWaitSec, defaultLongPollWaitSec, 1, defaultLongPollWaitSec),
-		SyncDebounceSec:   bounded(system.MaxSyncDebounceSec, 300, defaultSyncDebounceSec, hardMaxDebounceSec),
-		RecycleBinDays:    bounded(system.MaxRecycleBinDays, hardMaxRecycleBinDays, 1, hardMaxRecycleBinDays),
-		VaultStorageBytes: maxInt64(system.MaxVaultStorageBytes, 0),
-		UploadSizeBytes:   uploadLimit,
+		LongPollWaitSec:      bounded(system.MaxLongPollWaitSec, defaultLongPollWaitSec, 1, defaultLongPollWaitSec),
+		SyncDebounceSec:      bounded(system.MaxSyncDebounceSec, 300, defaultSyncDebounceSec, hardMaxDebounceSec),
+		RecycleBinDays:       bounded(system.MaxRecycleBinDays, hardMaxRecycleBinDays, 1, hardMaxRecycleBinDays),
+		HistoryRetentionDays: bounded(system.HistoryRetentionDays, 0, 0, hardMaxHistoryDays),
+		VaultStorageBytes:    maxInt64(system.MaxVaultStorageBytes, 0),
+		UploadSizeBytes:      uploadLimit,
 	}
 }
 

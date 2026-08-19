@@ -50,6 +50,11 @@ func (s *Scheduler) Register() {
 			log.Printf("[OSS cron] PurgeOrphanAttachments error: %v", err)
 		}
 	})
+	_, _ = s.cron.AddFunc(spec, func() {
+		if err := s.cl.PurgeExpiredHistory(); err != nil {
+			log.Printf("[OSS cron] PurgeExpiredHistory error: %v", err)
+		}
+	})
 }
 
 func (s *Scheduler) Start() {

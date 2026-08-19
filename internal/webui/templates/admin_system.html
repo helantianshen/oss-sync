@@ -49,6 +49,11 @@
         <input type="number" name="max_recycle_bin_days" min="1" max="3650" value="{{.Data.MaxRecycleBinDays}}" required>
       </label>
       <label>
+        <span>{{.Layout.T "admin.history_retention_days"}}</span>
+        <input type="number" name="history_retention_days" min="0" max="3650" value="{{.Data.HistoryRetentionDays}}" required>
+        <small>{{.Layout.T "admin.zero_means_no_history_cleanup"}}</small>
+      </label>
+      <label>
         <span>{{.Layout.T "admin.max_vault_storage_mb"}}</span>
         <input type="number" name="max_vault_storage_mb" min="0" value="{{.Data.MaxVaultStorageMB}}" required>
         <small>{{.Layout.T "admin.zero_means_no_storage_limit"}}</small>

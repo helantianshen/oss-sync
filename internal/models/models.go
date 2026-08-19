@@ -76,10 +76,12 @@ type SystemSetting struct {
 	MaxLongPollWaitSec    int    `gorm:"not null;default:30"`
 	MaxSyncDebounceSec    int    `gorm:"not null;default:300"`
 	MaxRecycleBinDays     int    `gorm:"not null;default:3650"`
-	MaxVaultStorageBytes  int64  `gorm:"not null;default:0"`
-	MaxUploadSizeBytes    int64  `gorm:"not null;default:0"`
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// HistoryRetentionDays 是文件历史快照的保留天数，0 表示不清理。
+	HistoryRetentionDays int   `gorm:"not null;default:0"`
+	MaxVaultStorageBytes int64 `gorm:"not null;default:0"`
+	MaxUploadSizeBytes   int64 `gorm:"not null;default:0"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // Vault 是一个独立的 Obsidian 笔记仓库。同步 revision、文件路径和配置均按 Vault 隔离。

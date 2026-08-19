@@ -429,6 +429,7 @@ func validAdminSystemForm() url.Values {
 		"max_long_poll_wait_sec":   {"30"},
 		"max_sync_debounce_sec":    {"300"},
 		"max_recycle_bin_days":     {"3650"},
+		"history_retention_days":   {"0"},
 		"max_vault_storage_mb":     {"0"},
 		"max_upload_size_mb":       {"100"},
 	}

@@ -21,6 +21,7 @@ func TestParseAdminSystemInput_whenValuesAreWithinHardLimits_convertsMegabytesTo
 		"max_long_poll_wait_sec":   {"20"},
 		"max_sync_debounce_sec":    {"60"},
 		"max_recycle_bin_days":     {"90"},
+		"history_retention_days":   {"30"},
 		"max_vault_storage_mb":     {"10240"},
 		"max_upload_size_mb":       {"50"},
 		"custom_fragments_enabled": {"on"},
@@ -44,6 +45,9 @@ func TestParseAdminSystemInput_whenValuesAreWithinHardLimits_convertsMegabytesTo
 	}
 	if !input.CustomFragmentsEnabled {
 		t.Fatal("custom fragments enabled should be true when checkbox is checked")
+	}
+	if input.HistoryRetentionDays != 30 {
+		t.Errorf("history retention days = %d, want 30", input.HistoryRetentionDays)
 	}
 }
 

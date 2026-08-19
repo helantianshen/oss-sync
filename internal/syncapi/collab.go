@@ -346,7 +346,14 @@ func (h *Handler) CollabUpload(c *gin.Context) {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, content, 0o644); err != nil {
+		// 原子写入：先写临时文件，再 rename 到目标路径，
+		// 避免进程崩溃时留下部分写入的损坏文件。
+		tmp := target + ".tmp"
+		if err := os.WriteFile(tmp, content, 0o644); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			_ = os.Remove(tmp)
 			return err
 		}
 		sum := sha256.Sum256(content)

@@ -751,17 +751,19 @@ func (h *Handler) V2Rename(c *gin.Context) {
 			conflictPath = req.NewPath
 			return errRevisionConflict
 		}
-
-		oldDisk = h.fileDiskPath(oldFile)
-		newKey := filestore.VaultStorageKey(vault.ID, req.NewPath)
-		newDisk = filepath.Join(h.Cfg.Storage.DataDir, filepath.FromSlash(newKey))
-		if err := os.MkdirAll(filepath.Dir(newDisk), 0o755); err != nil {
-			return err
-		}
-		if err := os.Rename(oldDisk, newDisk); err != nil {
-			return err
-		}
-		moved = true
+	// 注意：os.Rename 在数据库事务内执行。若进程在 rename 完成、commit 前崩溃，
+	// 文件系统与数据库将不一致。下方事务回滚逻辑仅覆盖事务返回 error 的情况。
+	// 崩溃场景由 reconcile cron 任务兜底修复（磁盘↔DB 一致性校验）。
+	oldDisk = h.fileDiskPath(oldFile)
+	newKey := filestore.VaultStorageKey(vault.ID, req.NewPath)
+	newDisk = filepath.Join(h.Cfg.Storage.DataDir, filepath.FromSlash(newKey))
+	if err := os.MkdirAll(filepath.Dir(newDisk), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(oldDisk, newDisk); err != nil {
+		return err
+	}
+	moved = true
 
 		oldRevision, err := nextVaultRevision(tx, vault.ID)
 		if err != nil {

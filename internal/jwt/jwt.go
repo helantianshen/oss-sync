@@ -67,6 +67,18 @@ func Parse(secret, token string) (*Claims, error) {
 	if len(parts) != 3 {
 		return nil, ErrInvalidToken
 	}
+	// 纵深防御：解析 header 并拒绝 alg != "HS256" 的 token。
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	var h header
+	if err := json.Unmarshal(headerBytes, &h); err != nil {
+		return nil, ErrInvalidToken
+	}
+	if h.Alg != "HS256" {
+		return nil, ErrInvalidToken
+	}
 	signingInput := parts[0] + "." + parts[1]
 	expectedSig := hmacSha256(secret, signingInput)
 	if !hmac.Equal([]byte(parts[2]), []byte(expectedSig)) {
