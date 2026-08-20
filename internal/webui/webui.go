@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -323,25 +324,40 @@ func requestedWebLanguage(c *gin.Context) string {
 	if accept == "" {
 		return ""
 	}
+	// 遍历所有语言段，按 q 值选择客户端偏好最高的支持语言。
+	// q=0 表示客户端明确不接受该语言，必须排除。
+	bestLang := ""
+	bestQ := -1.0
 	for _, part := range strings.Split(accept, ",") {
-		// 每段形如 "zh-CN;q=0.9" 或 "en"。
-		tag := part
-		if idx := strings.Index(part, ";"); idx >= 0 {
-			tag = part[:idx]
+		piece := strings.TrimSpace(part)
+		q := 1.0
+		if idx := strings.Index(piece, ";"); idx >= 0 {
+			params := piece[idx+1:]
+			piece = piece[:idx]
+			if qi := strings.Index(params, "q="); qi >= 0 {
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(params[qi+2:]), 64); err == nil {
+					q = parsed
+				}
+			}
 		}
-		tag = strings.TrimSpace(tag)
+		tag := strings.TrimSpace(piece)
 		// 取主语言子标签：zh-CN → zh, en-US → en。
 		if idx := strings.Index(tag, "-"); idx > 0 {
 			tag = tag[:idx]
 		}
-		switch strings.ToLower(tag) {
-		case "zh":
-			return "zh"
-		case "en":
-			return "en"
+		tag = strings.ToLower(tag)
+		if tag != "zh" && tag != "en" {
+			continue
+		}
+		if q > bestQ {
+			bestLang = tag
+			bestQ = q
 		}
 	}
-	return ""
+	if bestQ <= 0 {
+		return ""
+	}
+	return bestLang
 }
 
 func (h *Handler) t(c *gin.Context, key string, args ...any) string {

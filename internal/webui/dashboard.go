@@ -27,6 +27,7 @@ import (
 	"github.com/oss/oss-server/internal/recycle"
 	"github.com/oss/oss-server/internal/settingspolicy"
 	"github.com/oss/oss-server/internal/shares"
+	"github.com/oss/oss-server/internal/synclock"
 	"github.com/oss/oss-server/internal/vaultaccess"
 	"github.com/oss/oss-server/internal/vaultbackup"
 )
@@ -401,6 +402,9 @@ func (h *Handler) deleteFile(c *gin.Context) {
 
 // webDeleteFile 供网页端使用的删除服务，写入历史并把正文移入回收站。
 func (h *Handler) webDeleteFile(vault models.Vault, u *models.User, path string) error {
+	lock := synclock.Vault(vault.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	var file models.File
 	if err := h.DB.Where("user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ?",
 		vault.OwnerID, vault.ID, path, false).First(&file).Error; err != nil {
@@ -656,6 +660,9 @@ func (h *Handler) restoreRecycle(c *gin.Context) {
 }
 
 func (h *Handler) webRestoreRecycle(vault models.Vault, u *models.User, fileID uint) error {
+	lock := synclock.Vault(vault.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	var file models.File
 	if err := h.DB.Where("id = ? AND vault_id = ? AND is_deleted = ?", fileID, vault.ID, true).
 		First(&file).Error; err != nil {
@@ -739,6 +746,9 @@ func (h *Handler) restoreHistory(c *gin.Context) {
 }
 
 func (h *Handler) webRestoreHistory(vault models.Vault, u *models.User, histID uint) error {
+	lock := synclock.Vault(vault.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	var hist models.FileHistory
 	if err := h.DB.Where("id = ? AND vault_id = ?", histID, vault.ID).First(&hist).Error; err != nil {
 		return errors.New("记录不存在")

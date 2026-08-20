@@ -265,6 +265,15 @@ func CleanupExpired(db *gorm.DB, dataDir, vaultID string, retentionDays int, now
 		}
 	}
 
+	// 先删除无引用的快照文件，全部成功后再删数据库记录。
+	// 若文件删除失败，DB 行保留，下次 cron 可重试，避免孤儿快照永久泄漏。
+	for k := range keysToDelete {
+		diskPath := DiskPath(dataDir, k)
+		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
 	// 删除数据库记录。
 	ids := make([]uint, len(expired))
 	for i, h := range expired {
@@ -272,14 +281,6 @@ func CleanupExpired(db *gorm.DB, dataDir, vaultID string, retentionDays int, now
 	}
 	if err := db.Where("id IN ?", ids).Delete(&models.FileHistory{}).Error; err != nil {
 		return err
-	}
-
-	// 删除无引用的快照文件。
-	for k := range keysToDelete {
-		diskPath := DiskPath(dataDir, k)
-		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
-			return err
-		}
 	}
 	return nil
 }
