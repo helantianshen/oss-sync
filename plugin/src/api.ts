@@ -281,7 +281,8 @@ export class OSSApiClient {
 
   constructor(
     private settings: OSSSettings,
-    private readonly diagnostics?: Diagnostics
+    private readonly diagnostics?: Diagnostics,
+    private readonly onTokenExpired?: () => Promise<void>
   ) {}
 
   setToken(token: string | null): void {
@@ -478,7 +479,7 @@ export class OSSApiClient {
       });
       status = res.status;
       if (res.status >= 400) {
-        this.parseResponse<never>(res.status, res.json, res.text);
+        await this.parseResponse<never>(res.status, res.json, res.text);
       }
       bytes = res.arrayBuffer.byteLength;
       return {
@@ -822,7 +823,7 @@ export class OSSApiClient {
       });
       status = res.status;
       if (res.status >= 400) {
-        this.parseResponse<never>(res.status, res.json, res.text);
+        await this.parseResponse<never>(res.status, res.json, res.text);
       }
       bytes = res.arrayBuffer.byteLength;
       return {
@@ -985,7 +986,7 @@ export class OSSApiClient {
     this.diagnostics?.record({ kind: "api", at: Date.now(), method, status, durationMs: Date.now() - startedAt });
   }
 
-  private parseResponse<T>(status: number, json: any, text: string): T {
+  private async parseResponse<T>(status: number, json: any, text: string): Promise<T> {
     if (status >= 400) {
       let body: any = json;
       if (!body || typeof body !== "object") {
@@ -995,7 +996,7 @@ export class OSSApiClient {
           body = null;
         }
       }
-      throw new OSSApiError(
+      const error = new OSSApiError(
         body?.error || `HTTP ${status}`,
         status,
         body?.current,
@@ -1003,6 +1004,15 @@ export class OSSApiClient {
         body?.compacted_revision,
         body?.head_revision
       );
+      if (
+        status === 401 &&
+        this.token &&
+        (error.code === "token_expired" || error.message.toLowerCase().includes("jwt token expired"))
+      ) {
+        this.token = null;
+        await this.onTokenExpired?.();
+      }
+      throw error;
     }
     return json as T;
   }

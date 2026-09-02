@@ -123,7 +123,7 @@ func Middleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ident, err := authenticateAny(db, cfg, c.GetHeader("Authorization"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized: " + err.Error()})
+			abortUnauthorized(c, err)
 			return
 		}
 		c.Set(ContextKeyCurrentUser, ident.User)
@@ -141,11 +141,19 @@ func OptionalMiddleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 		}
 		ident, err := authenticateAny(db, cfg, header)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized: " + err.Error()})
+			abortUnauthorized(c, err)
 			return
 		}
 		c.Set(ContextKeyCurrentUser, ident.User)
 		c.Set(ContextKeyIdentity, ident)
 		c.Next()
 	}
+}
+
+func abortUnauthorized(c *gin.Context, err error) {
+	body := gin.H{"error": "unauthorized: " + err.Error()}
+	if errors.Is(err, jwt.ErrExpired) {
+		body["code"] = "token_expired"
+	}
+	c.AbortWithStatusJSON(http.StatusUnauthorized, body)
 }

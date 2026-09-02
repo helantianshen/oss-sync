@@ -2,12 +2,14 @@
 
 ## 当前目标
 
-维护已发布的 `0.1.16` 一键部署、全局管理命令和容器更新流程。
+维护已发布的 `0.1.16` 部署与更新流程，完成更新源统一，并拆分网页与插件的认证会话有效期。
 
 ## 当前状态
 
 - `0.1.16` 已公开发布；网页更新下载源选择已包含在该版本中，并通过本地与 Docker 验证。
-- 原生二进制网页更新可选择 `gh-proxy.com`、GitHub 官方或自定义 HTTPS 加速前缀；全量 Go、WebUI 和 JavaScript 检查通过。
+- 原生二进制网页更新和全局 `oss` 更新均可选择 `gh-proxy.com`、GitHub 官方或自定义 HTTPS 加速前缀；版本检查与文件下载使用同一来源，全量 Go、WebUI、插件和脚本检查通过。
+- 本轮来源统一改动仍在工作区中，尚未提交或发布新版本。
+- 网页会话默认 24 小时，插件设备令牌默认 30 天；插件令牌过期后会清除本地认证并提示重新登录。
 
 ## 已完成工作
 
@@ -33,7 +35,7 @@
   - 检查期间显示提示，仅当接口明确返回有新版本时才显示确认更新按钮；
   - 新版本、确认重启和更新已开始均提供中英文提示；已是最新版或检查失败时清空候选并隐藏确认按钮；
   - 修复 `script-src 'self'` / `style-src 'self'` CSP 拦截内联更新脚本和样式的问题：逻辑迁入已有 `app.js`，模板通过 `data-*` 提供本地化文案，并用 `hidden` 控制确认按钮；
-  - 网页更新增加 Release 文件下载源选择，默认使用 `gh-proxy.com`，可切换 GitHub 官方或输入自定义 HTTPS 加速前缀；版本检查仍使用 GitHub API，代理下载后继续校验 GitHub 提供的文件大小与 SHA-256；
+  - 网页更新增加 Release 来源选择，默认使用 `gh-proxy.com`，可切换 GitHub 官方或输入自定义 HTTPS 加速前缀；版本元数据检查与文件下载使用同一来源，代理下载后继续校验 GitHub 提供的文件大小与 SHA-256；
   - Docker 镜像通过 `OSS_DEPLOYMENT_MODE=container` 明确标记为宿主机管理；后台仍可检查新版本，但不会尝试改写容器内 `/app/oss-server`，也不显示确认更新按钮；发现新版本后提示在服务器运行 `oss` / `oss-sync` 并选择 1 更新；
   - 容器内触发更新时返回稳定代码 `external_update_required`，页面不再展示 `/app` 不可写的底层权限错误；
   - 保留原有 CSRF、确认、状态轮询和错误展示。
@@ -52,8 +54,13 @@
   - `0.1.16` 已公开发布：包含网页更新下载源选择、GHCR amd64/arm64 多架构镜像、两个架构镜像归档、服务端/插件资产、`install.sh`、`manage.sh` 和覆盖全部资产的 `checksums.txt`。
 - README、Compose 和 CI 已同步新增配置及安装器验证。
 - CI 稳定性：
-  - WebUI 测试配置显式设置 1 小时 JWT 有效期，避免零秒测试会话跨秒后被重定向登录；
+  - WebUI 测试通过独立网页会话有效期签发 Cookie，避免零秒测试会话跨秒后被重定向登录；
   - 后端 race 测试串行执行包并将单包超时设为 15 分钟，适配包含 bcrypt 的慢速 GitHub runner。
+- 认证会话：
+  - 保留普通 API `jwt_ttl_hours` 的 72 小时默认值，网页会话和插件设备令牌分别使用 `web_session_ttl_hours: 24` 与 `device_jwt_ttl_hours: 720`；旧配置缺少新字段时自动使用这两个默认值；
+  - `OSS_WEB_SESSION_TTL_HOURS` 与 `OSS_DEVICE_JWT_TTL_HOURS` 可分别覆盖网页和设备有效期；
+  - 只有真实 JWT 过期才返回稳定代码 `token_expired`，其他 401/403 不会触发插件自动登出；
+  - 插件收到过期响应后删除内存与持久 Token、停止同步和协作并提示重新登录，同时保留设备 ID 与 Vault 绑定。
 
 ## 重要决策
 
@@ -71,6 +78,8 @@
 - `install.sh`
 - `manage.sh`
 - `internal/config/config.go`、`configs/config.*.yaml`
+- `internal/config/auth_config.go`、`internal/auth/accounts.go`、`internal/auth/middleware.go`
+- `internal/webui/webui.go`、`plugin/src/api.ts`、`plugin/src/main.ts`
 - `internal/storagequota/quota.go`
 - `internal/syncapi/upload.go`、`v2.go`、`collab_upload.go`、`history.go`
 - `internal/webui/system_metrics.go`、模板、指标脚本和语言文件
@@ -78,8 +87,10 @@
 - `.github/workflows/ci.yml`、`.github/workflows/release.yml`、`docker-compose.yml`
 - `internal/webui/admin_update_test.go`
 - `internal/webui/assets/app.js`、`internal/webui/assets/console.css`、`internal/webui/templates/layout.html`
+- `plugin/package.json`、`plugin/package-lock.json`
 - `internal/update/capability.go`、`internal/update/errors.go`、`internal/update/handler.go`
 - `internal/update/download_source.go`、`internal/update/service.go`
+- `internal/update/github.go`、`internal/update/update.go`、`internal/update/update_test.go`
 - `Dockerfile`
 - `README.md`、`README_zh.md`
 
@@ -114,6 +125,11 @@
 - 网页下载源 Docker 验证 ✅：实际登录容器后台后，容器部署正确显示“宿主机管理”且不提供无效的容器内更新；以可写原生模式启动的隔离容器正确显示 `gh-proxy.com`、GitHub 官方和自定义 HTTPS 三个下载源，默认项、条件输入框、CSP 与静态资源版本均正确。
 - Docker 内运行 `go test ./internal/update -run TestResolveDownloadURL -count=1` ✅，官方、内置代理、自定义代理和无效地址后端解析路径通过。
 - Release `0.1.16` 工作流 `33518389958` ✅：服务端与插件资产、多架构 GHCR、两个离线镜像归档、`checksums.txt` 和公开 GitHub Release 均发布成功；13 个资产状态均为 uploaded。
+- 本轮统一来源链路验证 ✅：`go test ./... -count=1`、`go vet ./...`、`go build -o server.exe ./cmd/server`、`npm exec tsc -- --noEmit`、`npm test`（250 项）、`npm run build` 全部通过。
+- 真实网络验证 ✅：当前环境直连 GitHub API 返回 403，而通过 `gh-proxy.com` 检查公开 Release 成功返回最新版本 `0.1.16`；管理后台自定义来源请求正确携带 `download_source` 与 `download_proxy`。
+- 插件构建依赖安全修复 ✅：`esbuild` 从 `0.20.2` 升级至 `0.28.2`，消除 `GHSA-67mh-4wv8-2f99`；全新 `npm ci` 可重现，`npm audit` 为 0，TypeScript 检查、250 项测试和生产构建通过。
+- 一键安装 CI 兼容修复 ✅：本地 Release 资产改用 `file://` 基地址，管理脚本更新显式选择 `official`；安装器会在已有镜像的本地配置操作前归一化 `official`，修改容量或端口不再被 HTTPS 校验误拒绝，生产环境的 HTTPS 自定义源要求保持不变。
+- 认证会话拆分验证 ✅：网页 Cookie/JWT 为 24 小时、插件设备 JWT 为 30 天；`go test ./... -count=1`、`go vet ./...`、服务端构建、TypeScript 检查、插件 253 项测试及生产构建全部通过。
 
 ## 已知问题 / 风险
 
@@ -123,7 +139,7 @@
 - 旧版 `oss-data` 命名卷不会自动迁移到新部署目录，升级时优先保证数据安全。
 - 默认公开监听仍存在首个注册者成为管理员的抢注窗口，这是用户已明确接受的部署取舍。
 - Docker 部署仍由宿主机 `oss` / `oss-sync` 管理，网页下载源选择只在具备进程内更新能力的原生二进制部署中显示。
-- 当前 WSL Docker 与宿主代理共用的公网出口可能耗尽 GitHub 匿名 API 每小时 60 次的额度；本次真实 Release 网页测试收到 `403 rate limit exceeded`，失败发生在版本检查阶段，尚未进入新下载源逻辑。
+- 选择 GitHub 官方来源时仍受所在网络和 GitHub 匿名 API 限额影响；无法直连时应使用内置代理或可信的自定义 HTTPS 前缀。
 
 ## 剩余工作
 
@@ -131,4 +147,4 @@
 
 ## 推荐下一步
 
-- 在 GitHub API 额度可用的环境中补一次 `0.1.16` 真实 Release 下载端到端验证。
+- 审查并提交本轮未提交的统一来源改动，随后按需发布新版本并执行真实 Release 更新验证。

@@ -126,15 +126,15 @@
         <label>
           <span>{{.Layout.T "admin.update_download_source"}}</span>
           <select data-update-download-source>
-            <option value="proxy" selected>{{.Layout.T "admin.update_source_proxy"}}</option>
-            <option value="official">{{.Layout.T "admin.update_source_official"}}</option>
-            <option value="custom">{{.Layout.T "admin.update_source_custom"}}</option>
+            <option value="proxy" {{if eq .Data.Update.DownloadSource "proxy"}}selected{{end}}>{{.Layout.T "admin.update_source_proxy"}}</option>
+            <option value="official" {{if or (eq .Data.Update.DownloadSource "") (eq .Data.Update.DownloadSource "official")}}selected{{end}}>{{.Layout.T "admin.update_source_official"}}</option>
+            <option value="custom" {{if eq .Data.Update.DownloadSource "custom"}}selected{{end}}>{{.Layout.T "admin.update_source_custom"}}</option>
           </select>
           <small>{{.Layout.T "admin.update_download_source_help"}}</small>
         </label>
         <label data-update-custom-proxy hidden>
           <span>{{.Layout.T "admin.update_custom_proxy"}}</span>
-          <input type="url" inputmode="url" pattern="https://.*" placeholder="https://example.com/" data-update-custom-proxy-input>
+          <input type="url" inputmode="url" pattern="https://.*" placeholder="https://example.com/" value="{{if eq .Data.Update.DownloadSource "custom"}}{{.Data.Update.DownloadProxy}}{{end}}" data-update-custom-proxy-input>
         </label>
       </div>
       {{end}}

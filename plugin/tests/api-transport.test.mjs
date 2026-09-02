@@ -124,3 +124,69 @@ test("records safe status, duration, and byte metadata for binary transfers", as
     await cleanup();
   }
 });
+
+test("clears authentication and runs recovery when the device token expires", async () => {
+  globalThis.__ossRequests = [];
+  globalThis.__ossResponse = {
+    status: 401,
+    json: { error: "unauthorized", code: "token_expired" },
+    text: "",
+    arrayBuffer: new ArrayBuffer(0),
+    headers: {},
+  };
+  const { OSSApiClient, cleanup } = await loadApiClient();
+  try {
+    let recoveries = 0;
+    const client = new OSSApiClient(
+      settings("http://localhost:9090"),
+      undefined,
+      async () => { recoveries += 1; },
+    );
+    client.setToken("expired-token");
+
+    await assert.rejects(
+      client.uploadV2("vault-1", {
+        path: "expired.md",
+        baseRevision: 1,
+        hash: "hash",
+        mtime: 1,
+        operationID: "operation",
+        content: new ArrayBuffer(0),
+      }),
+      (error) => error.code === "token_expired",
+    );
+
+    assert.equal(client.hasToken(), false);
+    assert.equal(recoveries, 1);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("retains authentication for non-expiry authorization failures", async () => {
+  globalThis.__ossRequests = [];
+  globalThis.__ossResponse = {
+    status: 403,
+    json: { error: "device pending", code: "device_pending" },
+    text: "",
+    arrayBuffer: new ArrayBuffer(0),
+    headers: {},
+  };
+  const { OSSApiClient, cleanup } = await loadApiClient();
+  try {
+    let recoveries = 0;
+    const client = new OSSApiClient(
+      settings("http://localhost:9090"),
+      undefined,
+      async () => { recoveries += 1; },
+    );
+    client.setToken("valid-token");
+
+    await assert.rejects(client.authStatus(), (error) => error.code === "device_pending");
+
+    assert.equal(client.hasToken(), true);
+    assert.equal(recoveries, 0);
+  } finally {
+    await cleanup();
+  }
+});

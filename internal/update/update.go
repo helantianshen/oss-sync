@@ -7,8 +7,8 @@
 package update
 
 import (
-	"crypto/tls"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -33,6 +33,10 @@ type Options struct {
 	GitHubToken string
 	// APIBase 覆盖 GitHub API 地址（默认 https://api.github.com），仅供测试。
 	APIBase string
+	// DownloadSource 覆盖配置中的更新源：official / proxy / custom。
+	DownloadSource string
+	// DownloadProxy 覆盖配置中的自定义 HTTPS 地址前缀。
+	DownloadProxy string
 	// ExecPath 覆盖当前可执行文件路径（默认 os.Executable）。
 	ExecPath string
 	// HTTPClient 覆盖 GitHub 请求使用的 HTTP 客户端（默认带超时的客户端）。
@@ -54,11 +58,13 @@ type Updater struct {
 	running      atomic.Bool
 	restartFired atomic.Bool
 
-	stateMu    sync.Mutex // 保护 lastCheck / lastUpdate
-	lastCheck  *CheckResult
-	lastUpdate *UpdateResult
+	stateMu     sync.Mutex // 保护 lastCheck / lastUpdate
+	lastCheck   *CheckResult
+	lastUpdate  *UpdateResult
 	updatePhase OperationState
-	pinned    string
+	pinned      string
+	source      string
+	proxy       string
 
 	onUpdated func()
 }
@@ -111,13 +117,23 @@ func NewUpdater(cfg *config.Config, opts ...Options) (*Updater, error) {
 	if opt.APIBase != "" {
 		gh.apiBase = opt.APIBase
 	}
+	source := cfg.Update.EffectiveDownloadSource()
+	proxy := cfg.Update.EffectiveDownloadProxy()
+	if opt.DownloadSource != "" {
+		source = opt.DownloadSource
+	}
+	if opt.DownloadProxy != "" {
+		proxy = opt.DownloadProxy
+	}
 	return &Updater{
-		gh:       gh,
-		exe:      abs,
-		backup:   abs + ".bak",
-		verifier: verifier,
-		pinned:   normalizeVersion(opt.Pin),
+		gh:          gh,
+		exe:         abs,
+		backup:      abs + ".bak",
+		verifier:    verifier,
+		pinned:      normalizeVersion(opt.Pin),
 		updatePhase: updatePhaseIdle,
+		source:      source,
+		proxy:       proxy,
 	}, nil
 }
 
@@ -160,7 +176,7 @@ func (u *Updater) TriggerRestart() {
 // 使用 internal/version 严格比较，malformed/prerelease 已在 fetchLatest 层被拒绝；
 // 当前为开发版本时视为始终有可用更新（若上游为稳定版本）。
 func (u *Updater) CheckUpdate(ctx context.Context) (*CheckResult, error) {
-	release, err := u.gh.fetchLatest(ctx)
+	release, err := u.gh.fetchLatestFrom(ctx, u.source, u.proxy)
 	if err != nil && !errors.Is(err, ErrNoRelease) {
 		return nil, err
 	}
@@ -222,7 +238,7 @@ func (u *Updater) Update(ctx context.Context) *UpdateResult {
 	res := &UpdateResult{At: time.Now().UTC()}
 	u.setUpdateResultPhase(res, updatePhasePrepare)
 
-	release, err := u.gh.fetchLatest(ctx)
+	release, err := u.gh.fetchLatestFrom(ctx, u.source, u.proxy)
 	u.setUpdateResultPhase(res, updatePhaseFetchRelease)
 	if err != nil {
 		u.setUpdateResultPhase(res, updatePhaseFailed)
@@ -273,6 +289,22 @@ func (u *Updater) Update(ctx context.Context) *UpdateResult {
 		res.Code = "failed"
 		res.Error = err.Error()
 		return res
+	}
+	assetURL := asset.BrowserDownloadURL
+	if assetURL == "" {
+		assetURL = asset.URL
+	}
+	resolvedAssetURL, err := resolveUpdateURL(assetURL, u.source, u.proxy)
+	if err != nil {
+		u.setUpdateResultPhase(res, updatePhaseFailed)
+		res.Code = "failed"
+		res.Error = err.Error()
+		return res
+	}
+	if asset.BrowserDownloadURL != "" {
+		asset.BrowserDownloadURL = resolvedAssetURL
+	} else {
+		asset.URL = resolvedAssetURL
 	}
 
 	tmpDir, err := os.MkdirTemp(filepath.Dir(u.exe), ".oss-update-*")

@@ -100,7 +100,7 @@ export default class OSSPlugin extends Plugin {
 
   constructor(app: App, manifest: PluginManifest) {
     super(app, manifest);
-    this.api = new OSSApiClient(this.settings, this.diagnostics);
+    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired());
   }
 
   async onload(): Promise<void> {
@@ -110,7 +110,7 @@ export default class OSSPlugin extends Plugin {
     console.log("[oss-sync] diagnosticsEnabled=", this.settings.diagnosticsEnabled);
     this.emitRuntimeInfo();
 
-    this.api = new OSSApiClient(this.settings, this.diagnostics);
+    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired());
     if (this.token) this.api.setToken(this.token);
 
     this.baseline = new BaselineStore(this.app.vault);
@@ -352,8 +352,9 @@ export default class OSSPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
     if (data) {
-      this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-      this.token = data.token;
+      const { token, ...settings } = data;
+      this.settings = Object.assign({}, DEFAULT_SETTINGS, settings);
+      this.token = token;
     } else {
       this.settings = Object.assign({}, DEFAULT_SETTINGS);
     }
@@ -370,7 +371,11 @@ export default class OSSPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    const data: PluginData = { ...this.settings, password: "", token: this.token };
+    const data: PluginData = {
+      ...this.settings,
+      password: "",
+      ...(this.token ? { token: this.token } : {}),
+    };
     await this.saveData(data);
   }
 
@@ -605,6 +610,17 @@ export default class OSSPlugin extends Plugin {
     await this.saveSettings();
     this.setSyncState("idle");
     new Notice(this.t("notice.reloginRequired"));
+  }
+
+  private async handleTokenExpired(): Promise<void> {
+    this.token = undefined;
+    this.api.setToken(null);
+    this.availableVaults = [];
+    this.syncEngine.stop();
+    this.collabManager.stop();
+    await this.saveSettings();
+    this.setSyncState("idle");
+    new Notice(this.t("auth.tokenExpired"));
   }
 
   private async autoCheckUpdates(): Promise<void> {

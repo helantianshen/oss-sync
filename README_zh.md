@@ -92,11 +92,11 @@ Linux 服务器一键安装或升级：
 curl -fsSL https://raw.githubusercontent.com/helantianshen/oss-sync/main/install.sh | sudo bash
 ```
 
-官方引导脚本会依次询问映射端口、GitHub Release 下载源、部署路径和整个项目的数据容量上限；最新 amd64/arm64 容器归档及其 `checksums.txt` 都通过所选下载源获取，完成 SHA-256 校验后通过 `docker load` 导入。未安装 Docker 时，经确认后使用 Docker 官方脚本安装。端口留空时会避开常用服务端口，从 `10000-25565` 随机选择，并在所有网络接口开放。新部署默认将持久数据保存到 `/opt/oss-sync/data`，容量为应用层总限制，`0` 表示不限。达到上限后服务端会拒绝继续写入同步数据，并在管理后台显示项目空间用量。
+官方引导脚本会依次询问映射端口、GitHub Release 更新源、部署路径和整个项目的数据容量上限；更新源可选加速地址、GitHub 官方地址或自定义 HTTPS 地址前缀。最新 amd64/arm64 容器归档及其 `checksums.txt` 都通过所选下载源获取，完成 SHA-256 校验后通过 `docker load` 导入。未安装 Docker 时，经确认后使用 Docker 官方脚本安装。端口留空时会避开常用服务端口，从 `10000-25565` 随机选择，并在所有网络接口开放。新部署默认将持久数据保存到 `/opt/oss-sync/data`，容量为应用层总限制，`0` 表示不限。达到上限后服务端会拒绝继续写入同步数据，并在管理后台显示项目空间用量。
 
-安装完成后可运行全局命令 `oss` 或 `oss-sync` 打开管理菜单，用于更新、卸载、查看运行状态与空间用量、启停或重启服务，以及修改项目总容量和映射端口。卸载只移除容器和管理命令，项目数据默认保留。
+安装完成后可运行全局命令 `oss` 或 `oss-sync` 打开管理菜单，用于更新、卸载、查看运行状态与空间用量、启停或重启服务，以及修改项目总容量和映射端口。每次更新都会先选择更新源，因此无需重新安装即可更换加速地址。卸载只移除容器和管理命令，项目数据默认保留。
 
-再次执行同一安装命令会下载最新 Release 并重建容器，同时复用现有端口、部署路径和容量设置。旧版本创建的 `oss-data` 命名卷会继续保留，不自动迁移。非交互环境可使用 `OSS_PORT`、`OSS_RELEASE_PROXY=official`（或自定义文件加速前缀）、`OSS_INSTALL_DIR`、`OSS_STORAGE_LIMIT_GB` 和 `OSS_INSTALL_DOCKER=1`；高级场景仍可用 `OSS_IMAGE` 指定完整 Registry 镜像，例如 `ghcr.io/helantianshen/oss-sync-server:0.1.12`。
+再次执行同一安装命令会下载最新 Release 并重建容器，同时复用现有端口、部署路径和容量设置。旧版本创建的 `oss-data` 命名卷会继续保留，不自动迁移。非交互环境可使用 `OSS_PORT`、`OSS_RELEASE_PROXY=official`（或自定义 HTTPS 地址前缀）、`OSS_INSTALL_DIR`、`OSS_STORAGE_LIMIT_GB` 和 `OSS_INSTALL_DOCKER=1`。全局命令更新可使用 `OSS_RELEASE_SOURCE=official`、`OSS_RELEASE_SOURCE=proxy`，或使用 `OSS_RELEASE_PROXY=https://example.com/` 指定自定义源。高级场景仍可用 `OSS_IMAGE` 指定完整 Registry 镜像，例如 `ghcr.io/helantianshen/oss-sync-server:0.1.12`。
 
 默认 SQLite 部署不会拉取 PostgreSQL。手动增加 Docker Hub 依赖时，可以直接使用 `docker.1panel.live/library/postgres:17` 这类 1Panel 完整镜像地址，无需改变 Release 下载源或修改 Docker daemon 配置。
 
@@ -146,11 +146,17 @@ npm run build
 | `OSS_DB_DRIVER` / `DSN` | sqlite 或 postgres |
 | `OSS_STORAGE_DIR` | 文件存储根 |
 | `OSS_ALLOW_ANONYMOUS_REGISTRATION` | 初始注册开关 |
+| `OSS_WEB_SESSION_TTL_HOURS` | 网页控制台会话有效小时数，默认 `24` |
+| `OSS_DEVICE_JWT_TTL_HOURS` | 插件设备令牌有效小时数，默认 `720`（30 天） |
 | `OSS_DEVICE_STALE_DAYS` | 设备过期阈值 |
 | `OSS_RECONCILE_INTERVAL_HOURS` | 对账周期 |
+| `OSS_UPDATE_DOWNLOAD_SOURCE` | 服务端更新源：`official`、`proxy` 或 `custom` |
+| `OSS_UPDATE_DOWNLOAD_PROXY` | `custom` 源使用的 HTTPS 地址前缀 |
 
 
 Vault 级设置（管理员可强制）：`sync_mode`、`recycle_days`、`storage_quota`、`upload_size`。
+
+服务端更新使用 `configs/config.dev.yaml` 或 `configs/config.prod.yaml` 的 `download_source` 与 `download_proxy`。管理员也可以在“管理后台 → 系统设置 → 服务端更新”中为本次检查和更新选择来源。所选地址同时用于获取版本信息和下载文件，因此服务器无法直连 GitHub 时仍可检查并更新。
 
 ## 开发
 
@@ -180,7 +186,7 @@ npm run build
 
 - 密码 bcrypt 存储，永不落日志。
 - JWT 为 HS256，密钥按部署随机生成并落库。
-- 网页会话为 HttpOnly Secure SameSite Cookie + CSRF，插件为 Bearer JWT，互不混用。
+- 网页会话使用 24 小时有效的 HttpOnly Secure SameSite Cookie + CSRF；插件使用 30 天有效的设备绑定 Bearer JWT。插件令牌过期后会从本地移除并提示重新登录。
 - 所有变更接口校验已批准设备 + 仓库授权。
 
 ## 许可证

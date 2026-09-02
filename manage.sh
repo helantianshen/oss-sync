@@ -71,7 +71,7 @@ global_bin_dir() { local value; value="$(label io.oss-sync.global-bin-dir)"; pri
 
 show_status() {
   require_container
-  local state health image port bind limit dir source used version
+  local state health image port bind limit dir source used version proxy
   state="$(inspect '{{.State.Status}}')"
   health="$(inspect '{{if .State.Health}}{{.State.Health.Status}}{{else}}未配置{{end}}')"
   image="$(inspect '{{.Config.Image}}')"
@@ -79,6 +79,7 @@ show_status() {
   bind="$(current_bind)"
   limit="$(current_limit)"
   dir="$(install_dir)"
+  proxy="$(label io.oss-sync.release-proxy)"
   source="$(inspect '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')"
   used="$(du -sh "$source" 2>/dev/null | awk '{print $1}' || true)"
   if [[ -z "$used" && "$state" == "running" ]]; then
@@ -93,6 +94,7 @@ show_status() {
   printf '  访问：http://%s:%s\n' "${bind:-0.0.0.0}" "$port"
   printf '  部署路径：%s\n' "$dir"
   printf '  数据路径：%s\n' "${source:-未知}"
+  printf '  更新源：%s\n' "${proxy:-official}"
   printf '  已用空间：%s\n' "${used:-无法读取}"
   if [[ "$limit" == "0" ]]; then
     printf '  存储上限：不限\n\n'
@@ -102,7 +104,7 @@ show_status() {
 }
 
 run_installer() {
-  local mode="$1" port="$2" limit="$3" dir installer bind base proxy image
+  local mode="$1" port="$2" limit="$3" selected_proxy="${4:-}" dir installer bind base proxy image
   dir="$(install_dir)"
   installer="$dir/install.sh"
   [[ -r "$installer" ]] || fail "安装脚本不存在：$installer"
@@ -110,6 +112,7 @@ run_installer() {
   base="$(label io.oss-sync.release-base-url)"
   proxy="$(label io.oss-sync.release-proxy)"
   if [[ "$mode" == "update" ]]; then
+    proxy="$selected_proxy"
     env OSS_CONTAINER_NAME="$CONTAINER" OSS_PORT="$port" OSS_BIND_ADDRESS="${bind:-0.0.0.0}" \
       OSS_INSTALL_DIR="$dir" OSS_STORAGE_LIMIT_GB="$limit" OSS_RELEASE_BASE_URL="${base:-https://github.com/helantianshen/oss-sync/releases/latest/download}" \
       OSS_RELEASE_PROXY="${proxy:-official}" OSS_GLOBAL_BIN_DIR="$(global_bin_dir)" \
@@ -123,9 +126,51 @@ run_installer() {
     OSS_MANAGER_SOURCE="$SELF" OSS_INSTALLER_SOURCE="$installer" bash "$installer"
 }
 
+select_update_source() {
+  local requested="${1:-}" custom="${2:-}" choice
+  if [[ -z "$requested" ]]; then
+    requested="${OSS_RELEASE_SOURCE:-}"
+  fi
+  if [[ -z "$requested" ]]; then
+    requested="${OSS_RELEASE_PROXY:-}"
+  fi
+  if [[ -z "$requested" ]]; then
+    choice="$(read_tty $'请选择本次更新源：\n  1. 加速地址（gh-proxy.com）\n  2. GitHub 官方地址\n  3. 自定义 HTTPS 地址前缀\n请选择 [1]：')"
+    requested="${choice:-1}"
+  fi
+
+  case "$requested" in
+    1|proxy)
+      UPDATE_PROXY="https://gh-proxy.com/"
+      ;;
+    2|official)
+      UPDATE_PROXY="official"
+      ;;
+    3|custom)
+      if [[ -z "$custom" || "$custom" == "custom" || "$custom" == "proxy" || "$custom" == "official" ]]; then
+        custom="$(read_tty '请输入自定义 HTTPS 地址前缀（例如 https://gh-proxy.com/）：')"
+      fi
+      [[ "$custom" =~ ^https:// ]] || fail "自定义更新源必须以 https:// 开头"
+      UPDATE_PROXY="$custom"
+      ;;
+    https://*)
+      UPDATE_PROXY="$requested"
+      ;;
+    http://*)
+      fail "自定义更新源必须使用 HTTPS"
+      ;;
+    *)
+      fail "更新源选项无效，请输入 1、2、3、official、proxy 或 HTTPS 地址"
+      ;;
+  esac
+}
+
 update_oss() {
   require_container
-  run_installer update "$(current_port)" "$(current_limit)"
+  local requested="${1:-}" custom="${2:-}"
+  select_update_source "$requested" "$custom"
+  info "本次更新使用源：$UPDATE_PROXY"
+  run_installer update "$(current_port)" "$(current_limit)" "$UPDATE_PROXY"
 }
 
 uninstall_oss() {

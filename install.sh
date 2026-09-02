@@ -63,24 +63,30 @@ confirm_docker_install() {
 }
 
 select_release_source() {
-  [[ -n "$IMAGE" ]] && return 0
   if [[ -n "$RELEASE_PROXY" ]]; then
-    [[ "$RELEASE_PROXY" != "official" ]] || RELEASE_PROXY=""
+    if [[ "$RELEASE_PROXY" == "official" ]]; then
+      RELEASE_PROXY=""
+    fi
     return 0
   fi
+  [[ -n "$IMAGE" ]] && return 0
   local choice custom
-  choice="$(read_tty $'请选择 OSS Sync Release 下载源：\n  1. gh-proxy.com 国内文件加速（推荐）\n  2. GitHub 官方\n  3. 自定义加速前缀\n请选择 [1]：')"
+  choice="$(read_tty $'请选择 OSS Sync Release 更新源：\n  1. gh-proxy.com 加速地址（推荐）\n  2. GitHub 官方地址\n  3. 自定义 HTTPS 地址前缀\n请选择 [1]：')"
   case "$choice" in
     ""|1) RELEASE_PROXY="$DEFAULT_RELEASE_PROXY" ;;
     2) RELEASE_PROXY="" ;;
     3)
-      custom="$(read_tty '请输入文件加速前缀（例如 https://gh-proxy.com/）：')"
+      custom="$(read_tty '请输入自定义 HTTPS 地址前缀（例如 https://gh-proxy.com/）：')"
       [[ -n "$custom" ]] || fail "自定义加速前缀不能为空"
-      [[ "$custom" =~ ^https?:// ]] || fail "自定义加速前缀必须以 http:// 或 https:// 开头"
+      [[ "$custom" =~ ^https:// ]] || fail "自定义更新源必须以 https:// 开头"
       RELEASE_PROXY="$custom"
       ;;
     *) fail "下载源选项无效" ;;
   esac
+}
+
+validate_release_source() {
+  [[ -z "$RELEASE_PROXY" || "$RELEASE_PROXY" =~ ^https:// ]] || fail "更新源必须是 official 或 HTTPS 地址前缀"
 }
 
 download_release_image() {
@@ -300,6 +306,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 start_docker
 select_release_source
+validate_release_source
 select_install_dir
 select_storage_limit
 

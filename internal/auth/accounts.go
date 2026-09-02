@@ -152,7 +152,17 @@ func IssueToken(cfg *config.Config, user models.User) (string, int64, error) {
 		Username:     user.Username,
 		Role:         user.Role,
 		TokenVersion: user.TokenVersion,
-	})
+	}, time.Duration(cfg.Auth.JWTTTLHours)*time.Hour)
+}
+
+// IssueWebToken 为网页管理端签发短期会话 JWT。
+func IssueWebToken(cfg *config.Config, user models.User) (string, int64, error) {
+	return issueToken(cfg, jwt.Claims{
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		TokenVersion: user.TokenVersion,
+	}, time.Duration(cfg.Auth.EffectiveWebSessionTTLHours())*time.Hour)
 }
 
 // IssueDeviceToken 为指定设备签发绑定 did 的 JWT，复用与 IssueToken 相同的签名逻辑。
@@ -167,11 +177,10 @@ func IssueDeviceToken(cfg *config.Config, user models.User, deviceID jwt.DeviceI
 		Role:         user.Role,
 		TokenVersion: user.TokenVersion,
 		DeviceID:     jwt.DeviceID(normalized),
-	})
+	}, time.Duration(cfg.Auth.EffectiveDeviceJWTTTLHours())*time.Hour)
 }
 
-func issueToken(cfg *config.Config, claims jwt.Claims) (string, int64, error) {
-	ttl := time.Duration(cfg.Auth.JWTTTLHours) * time.Hour
+func issueToken(cfg *config.Config, claims jwt.Claims, ttl time.Duration) (string, int64, error) {
 	token, err := jwt.Sign(cfg.Auth.JWTSecret, claims, ttl)
 	if err != nil {
 		return "", 0, err

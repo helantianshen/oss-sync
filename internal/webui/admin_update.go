@@ -27,6 +27,8 @@ type adminUpdateStatus struct {
 	CapabilityOK   bool                     `json:"capability_ok"`
 	CapabilityErr  string                   `json:"capability_error,omitempty"`
 	ExternalUpdate bool                     `json:"external_update"`
+	DownloadSource string                   `json:"download_source"`
+	DownloadProxy  string                   `json:"download_proxy,omitempty"`
 	Active         *update.PublicOperation  `json:"active,omitempty"`
 	History        []update.PublicOperation `json:"history"`
 	IsUpdating     bool                     `json:"is_updating"`
@@ -41,6 +43,10 @@ func (h *Handler) buildUpdateStatus() adminUpdateStatus {
 		Env:            config.Env(),
 		GOOS:           runtime.GOOS,
 		GOARCH:         runtime.GOARCH,
+	}
+	if h.Cfg != nil {
+		s.DownloadSource = h.Cfg.Update.EffectiveDownloadSource()
+		s.DownloadProxy = h.Cfg.Update.EffectiveDownloadProxy()
 	}
 	if h.updateSvc != nil && h.updateSvc.Manager() != nil {
 		ms := h.updateSvc.Manager().CurrentStatus()
@@ -87,7 +93,15 @@ func (h *Handler) adminUpdateCheck(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	info, err := h.updateSvc.Check(ctx)
+	source := strings.TrimSpace(c.PostForm("download_source"))
+	if source == "" {
+		source = strings.TrimSpace(c.PostForm("source"))
+	}
+	customProxy := strings.TrimSpace(c.PostForm("download_proxy"))
+	if customProxy == "" {
+		customProxy = strings.TrimSpace(c.PostForm("proxy"))
+	}
+	info, err := h.updateSvc.CheckWithSource(ctx, source, customProxy)
 	if err != nil {
 		code := http.StatusBadGateway
 		if strings.Contains(strings.ToLower(err.Error()), "rate limited") || strings.Contains(err.Error(), "请求过于频繁") {
@@ -95,6 +109,9 @@ func (h *Handler) adminUpdateCheck(c *gin.Context) {
 		}
 		if errors.Is(err, update.ErrCheckNotFound) {
 			code = http.StatusNotFound
+		}
+		if errors.Is(err, update.ErrInvalidURL) {
+			code = http.StatusBadRequest
 		}
 		c.JSON(code, gin.H{"ok": false, "code": "check_failed", "error": err.Error()})
 		return

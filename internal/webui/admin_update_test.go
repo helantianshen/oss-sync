@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -69,7 +70,7 @@ func createTestUserWithHash(t *testing.T, db *gorm.DB, username, role string) *m
 
 func issueWebSession(t *testing.T, cfg *config.Config, user *models.User) (sessionCookie *http.Cookie, csrfToken string) {
 	t.Helper()
-	token, _, err := auth.IssueToken(cfg, *user)
+	token, _, err := auth.IssueWebToken(cfg, *user)
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
@@ -355,6 +356,70 @@ func TestAdminUpdate_MissingConfirm(t *testing.T) {
 	}
 }
 
+func TestAdminUpdateCheck_usesRequestedSource(t *testing.T) {
+	origVer := version.Version
+	version.Version = "1.0.0"
+	t.Cleanup(func() { version.Version = origVer })
+
+	var requestPath string
+	content := fakeExecBytesWebUI()
+	assetName, err := update.AssetName("v9.9.9", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatalf("asset name: %v", err)
+	}
+	digest := digestOfBytesWebUI(content)
+	var upstream *httptest.Server
+	upstream = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w,
+			`{"id":1001,"tag_name":"v9.9.9","html_url":%q,"draft":false,"prerelease":false,"assets":[{"id":2001,"name":%q,"browser_download_url":%q,"size":%d,"digest":%q}]}`,
+			upstream.URL+"/releases/v9.9.9", assetName, upstream.URL+"/assets/"+assetName, len(content), digest)
+	}))
+	t.Cleanup(upstream.Close)
+
+	db, cfg, dataDir := newWebUITestDB(t)
+	exePath := filepath.Join(t.TempDir(), "oss-server")
+	if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := update.NewManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	updater, err := update.NewUpdater(cfg, update.Options{
+		ExecPath:   exePath,
+		APIBase:    upstream.URL,
+		HTTPClient: upstream.Client(),
+		Verifier:   func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewUpdater: %v", err)
+	}
+	svc := update.NewService(mgr, updater, cfg)
+	h, err := New(db, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h.SetUpdateService(svc, updater)
+	admin := createTestUserWithHash(t, db, "source-admin", "admin")
+	session, csrf := issueWebSession(t, cfg, admin)
+	w := doWebRequest(t, h, "POST", "/dashboard/admin/system/update/check", url.Values{
+		"_csrf":           {csrf},
+		"download_source": {"custom"},
+		"download_proxy":  {upstream.URL + "/mirror"},
+	}, session, csrf, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("check status %d body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(requestPath, "/mirror/https://") {
+		t.Fatalf("release API did not use requested source: %q", requestPath)
+	}
+	if !strings.Contains(w.Body.String(), `"check_id"`) {
+		t.Fatalf("check response missing check_id: %s", w.Body.String())
+	}
+}
+
 func TestAdminSystemTemplate_UpdatePanel(t *testing.T) {
 	tpl, err := template.New("web").Funcs(template.FuncMap{
 		"formatBytes": formatBytes,
@@ -386,6 +451,7 @@ func TestAdminSystemTemplate_UpdatePanel(t *testing.T) {
 				GOOS:           runtime.GOOS,
 				GOARCH:         runtime.GOARCH,
 				CapabilityOK:   true,
+				DownloadSource: "proxy",
 				IsUpdating:     false,
 			},
 		},

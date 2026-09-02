@@ -438,6 +438,7 @@
     window.setInterval(fetchStatus, 5000);
 
     checkBtn.addEventListener("click", function () {
+      if (customProxyInput && customProxyInput.required && !customProxyInput.reportValidity()) return;
       updateAvailable = false;
       checkIdInput.value = "";
       versionInput.value = "";
@@ -447,7 +448,10 @@
       checkBtn.disabled = true;
       checkBtn.setAttribute("aria-busy", "true");
 
-      fetch(checkForm.getAttribute("data-update-action"), { method: "POST", headers: { "X-CSRF-Token": csrf }, credentials: "same-origin" })
+      var checkBody = new FormData();
+      if (sourceSelect) checkBody.append("download_source", sourceSelect.value);
+      if (sourceSelect && sourceSelect.value === "custom" && customProxyInput) checkBody.append("download_proxy", customProxyInput.value.trim());
+      fetch(checkForm.getAttribute("data-update-action"), { method: "POST", body: checkBody, headers: { "X-CSRF-Token": csrf }, credentials: "same-origin" })
         .then(function (response) { return response.json(); })
         .then(function (result) {
           if (!result.check_id) {

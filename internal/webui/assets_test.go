@@ -60,6 +60,8 @@ func TestServerUpdateAssets_whenLoaded_respectCSPAndHideConfirmUntilAvailable(t 
 		"!capabilityReady || !updateAvailable",
 		"triggerForm.hidden = hidden;",
 		`setNote(msg("checking"))`,
+		`var checkBody = new FormData();`,
+		`fetch(checkForm.getAttribute("data-update-action"), { method: "POST", body: checkBody`,
 		`window.confirm(msg("confirm")`,
 		`body.append("download_source", sourceSelect.value)`,
 		`body.append("download_proxy", customProxyInput.value.trim())`,

@@ -1,4 +1,4 @@
-﻿// GitHub 更新源
+// GitHub 更新源
 package update
 
 import (
@@ -57,6 +57,28 @@ type GitHubClient struct {
 	repo    string
 	token   string
 	limiter *auth.AttemptLimiter
+}
+
+func (c *GitHubClient) fetchLatestFrom(ctx context.Context, source, customProxy string) (*Release, error) {
+	client, err := c.withSource(source, customProxy)
+	if err != nil {
+		return nil, err
+	}
+	return client.fetchLatest(ctx)
+}
+
+func (c *GitHubClient) withSource(source, customProxy string) (*GitHubClient, error) {
+	apiBase, err := resolveUpdateURL(c.apiBase, source, customProxy)
+	if err != nil {
+		return nil, err
+	}
+	client := *c
+	client.apiBase = apiBase
+	client.http = clientWithSafeRedirect(c.http, apiBase)
+	if source != "" && strings.TrimSpace(source) != "official" {
+		client.token = ""
+	}
+	return &client, nil
 }
 
 func newGitHubClient(cfg *config.Config, httpClient *http.Client) *GitHubClient {
@@ -272,4 +294,3 @@ func isValidDigest(d string) bool {
 func isHexChar(c rune) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
-

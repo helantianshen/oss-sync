@@ -72,6 +72,7 @@ func (s *Service) StartHelperUpdate(ctx context.Context, checkID, downloadSource
 	if err := CheckHandoffCapability(s.up.exe); err != nil {
 		return nil, err
 	}
+	downloadSource, customProxy = s.effectiveSource(downloadSource, customProxy)
 	downloadURL, err := resolveDownloadURL(cand.AssetURL, downloadSource, customProxy)
 	if err != nil {
 		return nil, err
@@ -132,9 +133,14 @@ type CheckInfo struct {
 	Note            string     `json:"note,omitempty"`
 }
 
-// Check 对比 GitHub latest release，严格校验平台资产并颁发 durable check_id。
+// Check 通过配置的更新源检查 latest release，严格校验平台资产并颁发 durable check_id。
 // 复用与 /api/admin/update/check 相同的校验逻辑，返回可序列化的 CheckInfo。
 func (s *Service) Check(ctx context.Context) (*CheckInfo, error) {
+	return s.CheckWithSource(ctx, "", "")
+}
+
+// CheckWithSource checks the latest release through the selected source.
+func (s *Service) CheckWithSource(ctx context.Context, source, customProxy string) (*CheckInfo, error) {
 	if s.mgr == nil {
 		return nil, newUpdateError(CodeCorruptedState, "manager not initialized", ErrCorruptedState)
 	}
@@ -147,7 +153,8 @@ func (s *Service) Check(ctx context.Context) (*CheckInfo, error) {
 	// timeout enforced by caller; add 30s guard
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	release, err := s.up.gh.fetchLatest(cctx)
+	source, customProxy = s.effectiveSource(source, customProxy)
+	release, err := s.up.gh.fetchLatestFrom(cctx, source, customProxy)
 	if err != nil {
 		if errors.Is(err, ErrNoRelease) {
 			return &CheckInfo{
@@ -187,4 +194,11 @@ func (s *Service) Check(ctx context.Context) (*CheckInfo, error) {
 		ReleaseURL:      release.HTMLURL,
 		ExpiresAt:       cc.ExpiresAt,
 	}, nil
+}
+
+func (s *Service) effectiveSource(source, customProxy string) (string, string) {
+	if source != "" || s.cfg == nil {
+		return source, customProxy
+	}
+	return s.cfg.Update.EffectiveDownloadSource(), s.cfg.Update.EffectiveDownloadProxy()
 }

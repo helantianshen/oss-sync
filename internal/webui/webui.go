@@ -235,7 +235,7 @@ func (h *Handler) sessionUser(c *gin.Context) *models.User {
 
 // setSessionCookie 设置登录会话 cookie 与 CSRF cookie。
 func (h *Handler) setSessionCookie(c *gin.Context, user *models.User) {
-	token, expiresIn, err := auth.IssueToken(h.Cfg, *user)
+	token, expiresIn, err := auth.IssueWebToken(h.Cfg, *user)
 	if err != nil {
 		return
 	}

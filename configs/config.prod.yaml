@@ -20,6 +20,8 @@ storage:
 auth:
   jwt_secret: ""
   jwt_ttl_hours: 72
+  web_session_ttl_hours: 24
+  device_jwt_ttl_hours: 720
   allow_anonymous_registration: true # 仅作为新数据库注册开关的初始值；之后由管理面板控制
 
 sync:
@@ -31,6 +33,8 @@ sync:
 
 update:
   github_repo: "helantianshen/oss-sync" # GitHub Release 仓库（owner/repo）
+  download_source: "proxy"               # 更新检查与下载源：official / proxy / custom
+  download_proxy: ""                     # custom 源的 HTTPS 地址前缀
   timeout_seconds: 15                   # GitHub 请求超时
   check_limit: 6                        # 检查更新接口限流次数
   check_window_seconds: 60              # 检查更新接口限流窗口

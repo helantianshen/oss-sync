@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"runtime"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -72,15 +71,23 @@ func (h *Handler) getVersion(c *gin.Context) {
 	})
 }
 
-// check 对比 GitHub latest release，严格校验后创建 durable Manager check_id。
+// check 通过选定更新源检查 latest release，严格校验后创建 durable Manager check_id。
 func (h *Handler) check(c *gin.Context) {
-	if h.mgr == nil || h.up == nil {
+	if h.mgr == nil || h.up == nil || h.svc == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "update service not initialized"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	release, err := h.up.gh.fetchLatest(ctx)
+	source := c.Query("download_source")
+	if source == "" {
+		source = c.Query("source")
+	}
+	customProxy := c.Query("download_proxy")
+	if customProxy == "" {
+		customProxy = c.Query("proxy")
+	}
+	info, err := h.svc.CheckWithSource(ctx, source, customProxy)
 	if err != nil {
 		code := http.StatusBadGateway
 		if errors.Is(err, errRateLimited) {
@@ -90,42 +97,29 @@ func (h *Handler) check(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"update_available": false, "note": "上游仓库暂无 Release"})
 			return
 		}
+		if errors.Is(err, ErrInvalidURL) {
+			code = http.StatusBadRequest
+		}
 		c.JSON(code, gin.H{"error": err.Error()})
 		return
 	}
-	// 严格选择当前平台资产并创建 Candidate
-	asset, err := selectAsset(release.Assets, release.TagName, runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+	if info.CheckID == "" && !info.UpdateAvailable {
+		c.JSON(http.StatusOK, gin.H{
+			"update_available": false,
+			"current_version":  info.CurrentVersion,
+			"latest_version":   info.LatestVersion,
+			"note":             info.Note,
+		})
 		return
-	}
-	cand, err := NewCandidate(release.TagName, runtime.GOOS, runtime.GOARCH, asset.BrowserDownloadURL, release.HTMLURL, asset.Size, release.ID, asset.ID, asset.Digest)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	ttl := time.Hour
-	if h.Cfg != nil {
-		ttl = h.Cfg.Update.EffectiveCheckTTL()
-	}
-	cc, err := h.mgr.IssueChecked(*cand, ttl)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	// 兼容旧 CheckUpdate 语义：判断是否比当前版本新
-	updateAvailable := false
-	if isReleaseNewerThanCurrent(release.TagName, version.Version) {
-		updateAvailable = true
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"check_id":         cc.ID,
-		"candidate":        cand,
-		"current_version":  version.Version,
-		"latest_version":   release.TagName,
-		"update_available": updateAvailable,
-		"release_url":      release.HTMLURL,
-		"expires_at":       cc.ExpiresAt,
+		"check_id":         info.CheckID,
+		"candidate":        info.Candidate,
+		"current_version":  info.CurrentVersion,
+		"latest_version":   info.LatestVersion,
+		"update_available": info.UpdateAvailable,
+		"release_url":      info.ReleaseURL,
+		"expires_at":       info.ExpiresAt,
 	})
 }
 

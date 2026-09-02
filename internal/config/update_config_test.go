@@ -25,6 +25,19 @@ func TestUpdateConfig_EffectiveDefaults(t *testing.T) {
 	if got := c.EffectiveCheckWindow(); got != time.Minute {
 		t.Errorf("EffectiveCheckWindow default = %v", got)
 	}
+	if got := c.EffectiveDownloadSource(); got != "official" {
+		t.Errorf("EffectiveDownloadSource default = %q", got)
+	}
+}
+
+func TestUpdateConfig_EffectiveDownloadSource(t *testing.T) {
+	c := UpdateConfig{DownloadSource: " proxy ", DownloadProxy: " https://mirror.example.com/ "}
+	if got := c.EffectiveDownloadSource(); got != "proxy" {
+		t.Errorf("EffectiveDownloadSource = %q, want proxy", got)
+	}
+	if got := c.EffectiveDownloadProxy(); got != "https://mirror.example.com/" {
+		t.Errorf("EffectiveDownloadProxy = %q", got)
+	}
 }
 
 func TestUpdateConfig_EffectiveBounded(t *testing.T) {
@@ -91,6 +104,31 @@ func TestUpdateConfig_Validate_Repo(t *testing.T) {
 	c = UpdateConfig{CheckTTLSeconds: 10}
 	if err := c.validate(); err == nil {
 		t.Error("check ttl out of bounds should fail")
+	}
+}
+
+func TestUpdateConfig_Validate_DownloadSource(t *testing.T) {
+	valid := []UpdateConfig{
+		{DownloadSource: "official"},
+		{DownloadSource: "proxy"},
+		{DownloadSource: "custom", DownloadProxy: "https://mirror.example.com/github/"},
+	}
+	for _, c := range valid {
+		if err := c.validate(); err != nil {
+			t.Errorf("valid download source should pass: %+v: %v", c, err)
+		}
+	}
+	invalid := []UpdateConfig{
+		{DownloadSource: "mirror"},
+		{DownloadSource: "custom"},
+		{DownloadSource: "custom", DownloadProxy: "http://mirror.example.com/"},
+		{DownloadSource: "custom", DownloadProxy: "https://user:pass@mirror.example.com/"},
+		{DownloadSource: "custom", DownloadProxy: "https://mirror.example.com/?token=secret"},
+	}
+	for _, c := range invalid {
+		if err := c.validate(); err == nil {
+			t.Errorf("invalid download source should fail: %+v", c)
+		}
 	}
 }
 

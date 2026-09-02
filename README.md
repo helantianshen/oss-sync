@@ -92,11 +92,11 @@ One-command install or upgrade on a Linux server:
 curl -fsSL https://raw.githubusercontent.com/helantianshen/oss-sync/main/install.sh | sudo bash
 ```
 
-The official bootstrap script asks for the host port, GitHub Release download source, deployment path, and a total project storage limit. It downloads both the latest amd64/arm64 container archive and its `checksums.txt` through the selected source, verifies SHA-256, and imports it with `docker load`. It detects Docker and offers to install it with Docker's official installer. Leave the port blank to choose one randomly from `10000-25565` while skipping common service ports. New installations keep persistent data under `/opt/oss-sync/data`; the application-wide storage limit rejects further sync writes when reached, and `0` means unlimited.
+The official bootstrap script asks for the host port, GitHub Release source, deployment path, and a total project storage limit. The source can be the accelerated URL, GitHub official, or a custom HTTPS URL prefix. It downloads both the latest amd64/arm64 container archive and its `checksums.txt` through the selected source, verifies SHA-256, and imports it with `docker load`. It detects Docker and offers to install it with Docker's official installer. Leave the port blank to choose one randomly from `10000-25565` while skipping common service ports. New installations keep persistent data under `/opt/oss-sync/data`; the application-wide storage limit rejects further sync writes when reached, and `0` means unlimited.
 
-After installation, run the global `oss` or `oss-sync` command to update or uninstall OSS Sync, inspect runtime and storage usage, start, stop or restart it, and change the project capacity or mapped port. Uninstalling removes the container and commands while retaining project data by default.
+After installation, run the global `oss` or `oss-sync` command to update or uninstall OSS Sync, inspect runtime and storage usage, start, stop or restart it, and change the project capacity or mapped port. Each update asks which source to use, so the accelerated URL can be changed without reinstalling. Uninstalling removes the container and commands while retaining project data by default.
 
-Running the same install command again downloads the latest Release and recreates the container while reusing its port, deployment path, and capacity setting. Legacy `oss-data` volumes remain in place and are not migrated automatically. Non-interactive installs can set `OSS_PORT`, `OSS_RELEASE_PROXY=official` (or a custom file-proxy prefix), `OSS_INSTALL_DIR`, `OSS_STORAGE_LIMIT_GB`, and `OSS_INSTALL_DOCKER=1`. `OSS_IMAGE` remains an advanced override for a complete registry image such as `ghcr.io/helantianshen/oss-sync-server:0.1.12`.
+Running the same install command again downloads the latest Release and recreates the container while reusing its port, deployment path, and capacity setting. Legacy `oss-data` volumes remain in place and are not migrated automatically. Non-interactive installs can set `OSS_PORT`, `OSS_RELEASE_PROXY=official` (or a custom HTTPS URL prefix), `OSS_INSTALL_DIR`, `OSS_STORAGE_LIMIT_GB`, and `OSS_INSTALL_DOCKER=1`. For the global manager, set `OSS_RELEASE_SOURCE=official`, `OSS_RELEASE_SOURCE=proxy`, or `OSS_RELEASE_PROXY=https://example.com/` to select the source for an update. `OSS_IMAGE` remains an advanced override for a complete registry image such as `ghcr.io/helantianshen/oss-sync-server:0.1.12`.
 
 The default SQLite installation does not pull PostgreSQL. If Docker Hub dependencies are added manually, a complete 1Panel mirror reference such as `docker.1panel.live/library/postgres:17` can be used without changing the Release download source or the Docker daemon configuration.
 
@@ -146,14 +146,20 @@ Reload Obsidian → Enable *Obsidian Sync & Share* → Fill server URL, username
 | `OSS_DB_DRIVER` / `DSN` | sqlite or postgres |
 | `OSS_STORAGE_DIR` | file storage root |
 | `OSS_ALLOW_ANONYMOUS_REGISTRATION` | initial register switch |
+| `OSS_WEB_SESSION_TTL_HOURS` | web console session lifetime in hours; default `24` |
+| `OSS_DEVICE_JWT_TTL_HOURS` | plugin device token lifetime in hours; default `720` (30 days) |
 | `OSS_DEVICE_STALE_DAYS` | stale device threshold |
 | `OSS_RECONCILE_INTERVAL_HOURS` | storage check interval |
+| `OSS_UPDATE_DOWNLOAD_SOURCE` | server update source: `official`, `proxy`, or `custom` |
+| `OSS_UPDATE_DOWNLOAD_PROXY` | HTTPS URL prefix used when the source is `custom` |
 
 
 Vault settings (per Vault, admin can force):
 
 - `sync_mode`: `user_choice` | `short_poll` | `long_poll`
 - recycle bin days, storage quota, upload size
+
+Server updates use `download_source` and `download_proxy` from the update section in `configs/config.dev.yaml` or `configs/config.prod.yaml`. The Admin → System → Server update panel can override them for the current check and update. The selected source is used for both release metadata and the binary download, which allows updates when the server cannot reach GitHub directly.
 
 ## Development
 
@@ -183,7 +189,7 @@ Project conventions: Go with `gofumpt` + `golangci-lint`, TypeScript strict, `uv
 
 - Passwords are bcrypt-hashed, never logged.
 - JWT is HS256 with per-deployment random secret.
-- Sessions: web uses HttpOnly Secure SameSite cookies + CSRF; plugin uses Bearer JWT; they do not mix.
+- Sessions: web uses 24-hour HttpOnly Secure SameSite cookies + CSRF; plugin uses a 30-day device-bound Bearer JWT. Expired plugin tokens are removed locally and require a new login.
 - All mutating web requests require CSRF; all sync/collab requests require approved device + vault authorization.
 
 ## License

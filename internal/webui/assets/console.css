@@ -1387,8 +1387,10 @@ body.body--console .console {
 .server-update-summary small { display: block; margin-top: 6px; color: var(--muted); font: 10px/1.4 "IBM Plex Mono", "Cascadia Mono", monospace; overflow-wrap: anywhere; }
 .server-update-summary small:empty::before { content: "—"; }
 .server-update-body { display: grid; gap: 14px; padding: 16px 24px 18px; border-top: 1px solid var(--line); }
-.server-update-source { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr); gap: 12px; }
-.server-update-source label { display: grid; gap: 6px; }
+.server-update-source { display: flex; flex-wrap: wrap; gap: 12px; }
+.server-update-source label { display: grid; flex: 1 1 320px; min-width: 0; align-content: start; gap: 6px; }
+.server-update-source select,
+.server-update-source input { height: 38px; min-height: 38px; line-height: 20px; }
 .server-update-source label > span { font-weight: 750; }
 .server-update-source small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .server-update-source [hidden] { display: none; }
@@ -1419,7 +1421,8 @@ body.body--console .console {
 @media (max-width: 820px) { .button-row, .theme-setting-row__fields { grid-template-columns: 1fr; } }
 @media (max-width: 820px) {
   .server-update-body { padding: 14px 16px 16px; }
-  .server-update-source { grid-template-columns: 1fr; }
+  .server-update-source { flex-direction: column; }
+  .server-update-source label { flex: 0 1 auto; width: 100%; }
   .server-update-status { padding: 0 16px 16px; }
   .server-update-meta__item--id { margin-left: 0; width: 100%; }
   .server-update-meta__code { max-width: 100%; }

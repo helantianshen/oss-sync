@@ -35,6 +35,8 @@ storage:
 auth:
   jwt_secret: "secret"
   jwt_ttl_hours: 72
+  web_session_ttl_hours: 24
+  device_jwt_ttl_hours: 720
   allow_anonymous_registration: true
 sync:
   max_concurrency: 6
@@ -49,6 +51,12 @@ sync:
 	}
 	if !cfg.Auth.AllowAnonymousRegistration {
 		t.Error("anonymous registration should be enabled from yaml")
+	}
+	if cfg.Auth.EffectiveWebSessionTTLHours() != 24 {
+		t.Errorf("web session ttl = %d, want 24", cfg.Auth.EffectiveWebSessionTTLHours())
+	}
+	if cfg.Auth.EffectiveDeviceJWTTTLHours() != 720 {
+		t.Errorf("device jwt ttl = %d, want 720", cfg.Auth.EffectiveDeviceJWTTTLHours())
 	}
 }
 
@@ -65,6 +73,8 @@ sync: {max_concurrency: 6}
 	t.Setenv("OSS_SERVER_PORT", "9999")
 	t.Setenv("OSS_STORAGE_DIR", "/var/data")
 	t.Setenv("OSS_STORAGE_MAX_TOTAL_SIZE_MB", "2048")
+	t.Setenv("OSS_WEB_SESSION_TTL_HOURS", "12")
+	t.Setenv("OSS_DEVICE_JWT_TTL_HOURS", "360")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -80,6 +90,38 @@ sync: {max_concurrency: 6}
 	}
 	if cfg.Storage.MaxTotalSizeBytes() != 2<<30 {
 		t.Errorf("storage limit not overridden: %d", cfg.Storage.MaxTotalSizeBytes())
+	}
+	if cfg.Auth.EffectiveWebSessionTTLHours() != 12 {
+		t.Errorf("web session ttl not overridden: %d", cfg.Auth.EffectiveWebSessionTTLHours())
+	}
+	if cfg.Auth.EffectiveDeviceJWTTTLHours() != 360 {
+		t.Errorf("device jwt ttl not overridden: %d", cfg.Auth.EffectiveDeviceJWTTTLHours())
+	}
+}
+
+func TestAuthConfig_LegacyConfigUsesScopedSessionDefaults(t *testing.T) {
+	cfg := AuthConfig{JWTTTLHours: 72}
+
+	if cfg.EffectiveWebSessionTTLHours() != 24 {
+		t.Errorf("web session ttl = %d, want 24", cfg.EffectiveWebSessionTTLHours())
+	}
+	if cfg.EffectiveDeviceJWTTTLHours() != 720 {
+		t.Errorf("device jwt ttl = %d, want 720", cfg.EffectiveDeviceJWTTTLHours())
+	}
+}
+
+func TestLoad_InvalidSessionTTLEnv(t *testing.T) {
+	writeConfig(t, "config.prod.yaml", `
+server: {host: "0.0.0.0", port: 8080, mode: "release"}
+database: {driver: "sqlite", dsn: "data/oss.db"}
+storage: {data_dir: "data"}
+auth: {jwt_secret: "secret", jwt_ttl_hours: 72}
+`)
+	t.Setenv("OSS_ENV", "prod")
+	t.Setenv("OSS_WEB_SESSION_TTL_HOURS", "tomorrow")
+
+	if _, err := Load(); err == nil {
+		t.Error("expected invalid web session ttl to fail")
 	}
 }
 

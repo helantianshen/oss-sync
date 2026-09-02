@@ -167,3 +167,27 @@ test("plugin update failure restarts paused sync and collaboration", async () =>
     assert.deepEqual(calls, ["sync-stop", "collab-stop", "sync-start", "collab-start"]);
   } finally { await plugin.onunload(); await cleanup(); restore(); }
 });
+
+test("expired device token is removed and prompts for login without losing vault binding", async () => {
+  const restore = installWindow();
+  const captured = { cb: null };
+  const { plugin, cleanup } = await createPlugin(captured);
+  try {
+    let saved;
+    const stops = [];
+    plugin.saveData = async (data) => { saved = data; };
+    plugin.syncEngine.stop = () => stops.push("sync");
+    plugin.collabManager.stop = () => stops.push("collaboration");
+
+    await plugin.handleTokenExpired();
+
+    assert.equal(plugin.isLoggedIn(), false);
+    assert.deepEqual(stops, ["sync", "collaboration"]);
+    assert.equal(Object.hasOwn(saved, "token"), false);
+    assert.equal(saved.clientId, "client-1");
+    assert.equal(saved.vaultId, "vault-1");
+    assert.equal(saved.vaultName, "Vault");
+    assert.equal(globalThis.__ossNotices.length, 1);
+    assert.match(globalThis.__ossNotices[0], /expired|过期/i);
+  } finally { await plugin.onunload(); await cleanup(); restore(); }
+});

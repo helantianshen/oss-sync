@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -41,8 +42,10 @@ type StorageConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSecret   string `yaml:"jwt_secret"`
-	JWTTTLHours int    `yaml:"jwt_ttl_hours"`
+	JWTSecret          string `yaml:"jwt_secret"`
+	JWTTTLHours        int    `yaml:"jwt_ttl_hours"`
+	WebSessionTTLHours int    `yaml:"web_session_ttl_hours"`
+	DeviceJWTTTLHours  int    `yaml:"device_jwt_ttl_hours"`
 	// AllowAnonymousRegistration 只用于初始化新数据库中的注册开关。
 	// 初始化后以数据库中的 SystemSetting 为准。
 	AllowAnonymousRegistration bool `yaml:"allow_anonymous_registration"`
@@ -60,6 +63,10 @@ type SyncConfig struct {
 type UpdateConfig struct {
 	// GitHubRepo 是发布仓库，格式 owner/repo。
 	GitHubRepo string `yaml:"github_repo"`
+	// DownloadSource 是更新检查与文件下载源：official / proxy / custom。
+	DownloadSource string `yaml:"download_source"`
+	// DownloadProxy 是 custom 源使用的 HTTPS 地址前缀。
+	DownloadProxy string `yaml:"download_proxy"`
 	// TimeoutSeconds 是 GitHub 请求的超时秒数，0 表示使用默认值 15，边界 5..120。
 	TimeoutSeconds int `yaml:"timeout_seconds"`
 	// UpdateTimeoutSeconds 是整次更新流程的超时秒数，0 表示使用默认值 600，边界 30..1800。
@@ -82,6 +89,9 @@ type UpdateConfig struct {
 //   - OSS_SERVER_HOST / OSS_SERVER_PORT
 //   - OSS_STORAGE_DIR
 //   - OSS_STORAGE_MAX_TOTAL_SIZE_MB
+//   - OSS_WEB_SESSION_TTL_HOURS / OSS_DEVICE_JWT_TTL_HOURS
+//   - OSS_UPDATE_GITHUB_REPO
+//   - OSS_UPDATE_DOWNLOAD_SOURCE / OSS_UPDATE_DOWNLOAD_PROXY
 func Load() (*Config, error) {
 	env := os.Getenv("OSS_ENV")
 	if env == "" {
@@ -149,6 +159,20 @@ func (c *Config) applyEnvOverrides() error {
 		}
 		c.Storage.MaxTotalSizeMB = maxMB
 	}
+	if v := os.Getenv("OSS_WEB_SESSION_TTL_HOURS"); v != "" {
+		hours, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("OSS_WEB_SESSION_TTL_HOURS 必须是整数，收到 %q", v)
+		}
+		c.Auth.WebSessionTTLHours = hours
+	}
+	if v := os.Getenv("OSS_DEVICE_JWT_TTL_HOURS"); v != "" {
+		hours, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("OSS_DEVICE_JWT_TTL_HOURS 必须是整数，收到 %q", v)
+		}
+		c.Auth.DeviceJWTTTLHours = hours
+	}
 	if v := os.Getenv("OSS_DEVICE_STALE_DAYS"); v != "" {
 		if days, err := strconv.Atoi(v); err == nil {
 			c.Sync.DeviceStaleDays = days
@@ -161,6 +185,12 @@ func (c *Config) applyEnvOverrides() error {
 	}
 	if v := os.Getenv("OSS_UPDATE_GITHUB_REPO"); v != "" {
 		c.Update.GitHubRepo = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("OSS_UPDATE_DOWNLOAD_SOURCE"); v != "" {
+		c.Update.DownloadSource = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("OSS_UPDATE_DOWNLOAD_PROXY"); v != "" {
+		c.Update.DownloadProxy = strings.TrimSpace(v)
 	}
 	return nil
 }
@@ -190,6 +220,9 @@ func (c *Config) validate() error {
 		c.Sync.OrphanFileGraceHours < 0 {
 		return fmt.Errorf("sync maintenance intervals cannot be negative")
 	}
+	if err := c.Auth.validate(); err != nil {
+		return err
+	}
 	if err := c.Update.validate(); err != nil {
 		return err
 	}
@@ -207,6 +240,19 @@ func (c UpdateConfig) validate() error {
 			return err
 		}
 	}
+	source := strings.TrimSpace(c.DownloadSource)
+	if source != "" && source != "official" && source != "proxy" && source != "custom" {
+		return fmt.Errorf("update.download_source 仅支持 official / proxy / custom，收到 %q", source)
+	}
+	proxy := strings.TrimSpace(c.DownloadProxy)
+	if proxy != "" {
+		if err := validateHTTPSPrefix(proxy); err != nil {
+			return fmt.Errorf("update.download_proxy: %w", err)
+		}
+	}
+	if source == "custom" && proxy == "" {
+		return fmt.Errorf("update.download_proxy 在 custom 源下不能为空")
+	}
 	if c.TimeoutSeconds != 0 && (c.TimeoutSeconds < 5 || c.TimeoutSeconds > 120) {
 		return fmt.Errorf("update.timeout_seconds 必须在 5..120 之间，收到 %d", c.TimeoutSeconds)
 	}
@@ -221,6 +267,17 @@ func (c UpdateConfig) validate() error {
 	}
 	if c.CheckWindowSeconds != 0 && (c.CheckWindowSeconds < 10 || c.CheckWindowSeconds > 3600) {
 		return fmt.Errorf("update.check_window_seconds 必须在 10..3600 之间，收到 %d", c.CheckWindowSeconds)
+	}
+	return nil
+}
+
+func validateHTTPSPrefix(raw string) error {
+	if len(raw) > 1024 {
+		return fmt.Errorf("必须不超过 1024 个字符")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("必须为不含账号、查询参数和片段的 HTTPS 地址前缀")
 	}
 	return nil
 }
@@ -293,6 +350,19 @@ func (c UpdateConfig) EffectiveGitHubRepo() string {
 		return s
 	}
 	return "helantianshen/oss-sync"
+}
+
+// EffectiveDownloadSource 返回更新检查与下载使用的源。
+func (c UpdateConfig) EffectiveDownloadSource() string {
+	if source := strings.TrimSpace(c.DownloadSource); source != "" {
+		return source
+	}
+	return "official"
+}
+
+// EffectiveDownloadProxy 返回自定义更新源前缀。
+func (c UpdateConfig) EffectiveDownloadProxy() string {
+	return strings.TrimSpace(c.DownloadProxy)
 }
 
 // EffectiveTimeout 返回 GitHub 请求超时，边界 5..120，默认 15。

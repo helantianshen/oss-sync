@@ -238,8 +238,8 @@ func TestExtractBinaryFromArchive(t *testing.T) {
 	}
 
 	zipBytes := makeZip(t, map[string][]byte{
-		"oss-server":  exe,
-		"notes.txt":   readme,
+		"oss-server": exe,
+		"notes.txt":  readme,
 	})
 	zipPath := filepath.Join(dir, "server.zip")
 	if err := os.WriteFile(zipPath, zipBytes, 0o755); err != nil {
@@ -577,6 +577,64 @@ func TestCheckUpdate_RateLimited(t *testing.T) {
 	}
 }
 
+func TestServiceCheck_usesConfiguredSourceForReleaseAPI(t *testing.T) {
+	var requestPath string
+	content := fakeExecBytes()
+	assetName := expectedTestAssetName("v9.9.9")
+	digest := digestOfBytes(content)
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.EscapedPath()
+		if !strings.Contains(requestPath, "/mirror/https://") {
+			http.Error(w, "missing source prefix", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w,
+			`{"id":1001,"tag_name":"v9.9.9","html_url":%q,"draft":false,"prerelease":false,"assets":[{"id":2001,"name":%q,"browser_download_url":%q,"size":%d,"digest":%q}]}`,
+			srv.URL+"/releases/v9.9.9", assetName, srv.URL+"/assets/"+assetName, len(content), digest)
+	}))
+	t.Cleanup(srv.Close)
+
+	dataDir := t.TempDir()
+	exePath := filepath.Join(t.TempDir(), "oss-server")
+	if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Storage: config.StorageConfig{DataDir: dataDir},
+		Update: config.UpdateConfig{
+			GitHubRepo:     "fake/oss-sync",
+			DownloadSource: "custom",
+			DownloadProxy:  srv.URL + "/mirror",
+		},
+	}
+	mgr, err := NewManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	up, err := NewUpdater(cfg, Options{
+		ExecPath:   exePath,
+		APIBase:    srv.URL,
+		HTTPClient: srv.Client(),
+		Verifier:   func(string, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewUpdater: %v", err)
+	}
+	svc := NewService(mgr, up, cfg)
+	info, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if info.CheckID == "" || !info.UpdateAvailable {
+		t.Fatalf("unexpected check result: %+v", info)
+	}
+	if requestPath == "" {
+		t.Fatal("release API was not requested")
+	}
+}
+
 func TestTriggerRestart_CallsCallbackOnce(t *testing.T) {
 	up := newMockUpstream(t, "v9.9.9", fakeExecBytes())
 	exePath := filepath.Join(t.TempDir(), "oss-server")
@@ -593,4 +651,3 @@ func TestTriggerRestart_CallsCallbackOnce(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 }
-
