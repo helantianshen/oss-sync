@@ -499,37 +499,36 @@ func TestAdminSystemTemplate_UpdatePanel(t *testing.T) {
 	if strings.Contains(page, `<script`) || strings.Contains(page, `style=`) {
 		t.Error("update panel must not rely on inline script or style blocked by CSP")
 	}
-	// Container deployments keep update checks in the UI but update via the host command.
+	// Container deployments use the same in-process update path; the writable
+	// runtime directory lets Docker restart the updated process.
 	data.Data["Update"] = adminUpdateStatus{
 		CurrentVersion: "1.0.0",
 		Env:            "prod",
 		GOOS:           runtime.GOOS,
 		GOARCH:         runtime.GOARCH,
-		ExternalUpdate: true,
+		CapabilityOK:   true,
+		DownloadSource: "proxy",
 	}
 	buf.Reset()
 	if err := tpl.ExecuteTemplate(&buf, "admin-system", data); err != nil {
 		t.Fatalf("render container deployment: %v", err)
 	}
 	page2 := buf.String()
-	if !strings.Contains(page2, `宿主机管理`) || !strings.Contains(page2, `oss-sync`) {
-		t.Errorf("container deployment should direct updates to the host command")
+	if !strings.Contains(page2, `data-capability-ready="true"`) || !strings.Contains(page2, `data-update-download-source`) {
+		t.Errorf("container deployment should expose the in-process update controls")
 	}
-	if !strings.Contains(page2, `data-capability-ready="false"`) || !strings.Contains(page2, `data-external-update="true"`) {
-		t.Errorf("container deployment should not expose in-process update capability")
-	}
-	if strings.Contains(page2, `data-update-download-source`) {
-		t.Errorf("container deployment must choose its download source through the host management command")
+	if strings.Contains(page2, `data-external-update="true"`) {
+		t.Errorf("container deployment should not require an external updater")
 	}
 }
 
-func TestAdminUpdateStatus_ContainerUsesExternalManager(t *testing.T) {
+func TestAdminUpdateStatus_ContainerUsesInProcessUpdater(t *testing.T) {
 	db, cfg, _ := newWebUITestDB(t)
 	h, _, _ := newWebUIHandlerWithUpdate(t, db, cfg)
 	t.Setenv("OSS_DEPLOYMENT_MODE", "container")
 
 	status := h.buildUpdateStatus()
-	if status.CapabilityOK || !status.ExternalUpdate || status.CapabilityErr != "" {
+	if !status.CapabilityOK || status.ExternalUpdate || status.CapabilityErr != "" {
 		t.Fatalf("unexpected container update status: %+v", status)
 	}
 }

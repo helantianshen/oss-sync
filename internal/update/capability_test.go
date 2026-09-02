@@ -55,12 +55,11 @@ func TestCheckCapability_DevelopmentVersionRejected(t *testing.T) {
 	}
 }
 
-func TestCheckCapability_ContainerRequiresExternalUpdate(t *testing.T) {
+func TestCheckCapability_ContainerAllowsInProcessUpdate(t *testing.T) {
 	withVersion(t, "1.2.3")
 	t.Setenv("OSS_DEPLOYMENT_MODE", "container")
-	err := CheckCapability(regularFile(t), runtime.GOOS, runtime.GOARCH)
-	if err == nil || !IsExternalUpdateError(err) {
-		t.Fatalf("expected external update error, got %v", err)
+	if err := CheckCapability(regularFile(t), runtime.GOOS, runtime.GOARCH); err != nil {
+		t.Fatalf("container deployment should allow in-process update: %v", err)
 	}
 }
 

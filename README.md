@@ -121,7 +121,7 @@ docker run --rm -p 8080:8080 \
 ```
 
 
-Container deployments should be upgraded by rebuilding or replacing the image, not by mutating the running container binary. Removing the container keeps the named volume; `docker compose down -v` deletes its data and must be used with care.
+Container deployments can update in place from Admin → System → Server update. The image keeps the server binary in a writable runtime directory; after a verified replacement, the process exits and Docker's restart policy starts the new binary. Rebuilding or replacing the image remains the way to apply image-level changes. Removing the container keeps the named volume; `docker compose down -v` deletes its data and must be used with care.
 
 ### Build plugin
 

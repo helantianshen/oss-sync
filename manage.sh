@@ -85,7 +85,7 @@ show_status() {
   if [[ -z "$used" && "$state" == "running" ]]; then
     used="$(docker exec "$CONTAINER" sh -c 'du -sh /app/data 2>/dev/null | cut -f1' 2>/dev/null || true)"
   fi
-  version="$(docker exec "$CONTAINER" /app/oss-server --version 2>/dev/null || true)"
+  version="$(docker exec "$CONTAINER" /app/runtime/oss-server --version 2>/dev/null || true)"
   printf '\nOSS Sync 状态\n'
   printf '  容器：%s\n' "$CONTAINER"
   printf '  状态：%s（健康检查：%s）\n' "$state" "$health"

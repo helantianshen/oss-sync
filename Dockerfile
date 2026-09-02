@@ -28,16 +28,15 @@ FROM alpine:3.24
 RUN apk add --no-cache ca-certificates \
     && addgroup -S -g 10001 oss \
     && adduser -S -D -H -u 10001 -G oss oss \
-    && mkdir -p /app/data \
-    && chown oss:oss /app/data
+    && mkdir -p /app/data /app/runtime \
+    && chown oss:oss /app/data /app/runtime
 
 WORKDIR /app
 
-COPY --from=build --chmod=755 /out/oss-server /app/oss-server
+COPY --from=build --chown=oss:oss --chmod=755 /out/oss-server /app/runtime/oss-server
 COPY configs /app/configs
 
 ENV OSS_ENV=prod \
-    OSS_DEPLOYMENT_MODE=container \
     OSS_SERVER_HOST=0.0.0.0 \
     OSS_SERVER_PORT=8080 \
     OSS_STORAGE_DIR=/app/data \
@@ -48,4 +47,4 @@ USER 10001:10001
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app/oss-server"]
+ENTRYPOINT ["/app/runtime/oss-server"]
