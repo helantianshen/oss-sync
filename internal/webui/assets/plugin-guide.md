@@ -86,6 +86,20 @@ The archive limits are enforced before installation: 32 MiB total, at most 512 f
 
 `id` is the stable identity. Do not change it during an upgrade. `version` is the plugin version shown by the host. `api_version` is currently `1`.
 
+Optional top-level fields:
+
+| Field | Purpose |
+| --- | --- |
+| `description` | Shown in the plugin list |
+| `settings` | Host-rendered settings, stored per Vault |
+| `settings_visibility` | Sidebar visibility for the settings entry: `always` shows it as soon as the plugin is enabled; omitted or `when_used` shows it only when one of the plugin's blog or console theme resources is selected by a Vault. Plugins without theme resources always show their settings |
+| `update_url` | Author-run version endpoint used by **Check for updates**. See §11.1 |
+| `auto_check_update` | Reserved automatic-check flag; the host does not check on startup yet |
+| `hooks` | Simplified hook declaration |
+| `blog_themes` | Blog theme resources |
+| `console_themes` | Console theme resources |
+| `args` | Arguments passed to an executable process |
+
 ### 2.3 Minimal Go program
 
 ```go
@@ -495,6 +509,43 @@ The normal flow is:
 8. Delete a plugin only after disabling it.
 
 If the process crashes or violates the protocol, pending calls fail and the plugin can be enabled again to start a fresh process.
+
+### 11.1 Self-service update endpoint
+
+The host does not bundle an update channel for plugins; authors own distribution. Declare a lookup endpoint in the manifest:
+
+```json
+{
+  "id": "your-plugin",
+  "version": "1.0.0",
+  "update_url": "https://example.com/oss-plugin/latest.json",
+  "auto_check_update": false
+}
+```
+
+When an administrator clicks **Check for updates**, the host issues a GET to `update_url` and expects:
+
+```json
+{
+  "version": "1.1.0",
+  "url": "https://example.com/oss-plugin/your-plugin-1.1.0.zip",
+  "notes": "Fixes attachment sync"
+}
+```
+
+Behaviour by outcome:
+
+| Outcome | Host behaviour |
+| --- | --- |
+| `update_url` omitted | No check action is offered; the plugin must implement updates itself |
+| Endpoint unreachable or non-200 | Reports a failed check; other plugins are unaffected |
+| `version` not newer than current | Reports that the plugin is up to date |
+| Newer version with `url` | The action becomes **Update to x.y.z** and the version cell shows **New version: x.y.z**; the host downloads and applies the upgrade |
+| Newer version without `url` | Tells the administrator to update manually from the author's instructions |
+
+Versions are compared as strict SemVer (`major.minor.patch`); an invalid version is treated as no update. `auto_check_update` is reserved for future automatic checks and currently means nothing beyond documentation, so plugin startup never depends on an external endpoint.
+
+Downloading reuses the upload pipeline: size limits, path traversal and symlink checks, manifest and entrypoint validation, the ready handshake, and old-package retention on failure. The `url` must therefore point at a complete plugin ZIP, not at a patch file.
 
 ## 12. Testing checklist
 

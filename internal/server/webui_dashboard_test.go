@@ -952,12 +952,12 @@ func TestAuthPagesThemeControlsAndAuthLayout(t *testing.T) {
 		}
 	}
 
-	// 控制台 CSS：认证页单列布局 + 暗色安全 wordmark 变量 + 禁用浏览器缓存
+	// 控制台 CSS：认证页单列布局 + 暗色安全 wordmark 变量 + 主题与语言按钮单排 + 禁用浏览器缓存
 	css := doForm(t, router, http.MethodGet, "/ui/assets/console.css", nil, nil)
 	if css.Code != http.StatusOK {
 		t.Fatalf("console.css: %d", css.Code)
 	}
-	for _, want := range []string{".body--auth .console", "--wordmark-bg", "grid-template-columns: repeat(3", ".language-switcher__btn", "grid-column: 1 / -1", ".theme-switcher__btn.is-active", "border: 0", "box-shadow: none"} {
+	for _, want := range []string{".body--auth .console", "--wordmark-bg", ".theme-switcher {", "flex-wrap: nowrap", ".theme-switcher__btn.is-active", "border: 0", "box-shadow: none", ".upload-progress__bar"} {
 		if !strings.Contains(css.Body.String(), want) {
 			t.Errorf("console.css missing %q", want)
 		}
@@ -1256,7 +1256,7 @@ func TestWebConsoleDeviceListsExcludeRevokedDevices(t *testing.T) {
 	} {
 		body := page.Body.String()
 		if page.Code != http.StatusOK || strings.Contains(body, "revoked-device") ||
-			!strings.Contains(body, `class="panel-empty"`) || !strings.Contains(body, "0 devices") {
+			!strings.Contains(body, `class="panel-empty"`) {
 			t.Fatalf("%s page must exclude revoked device and render empty state: %d %s", name, page.Code, page.Body)
 		}
 	}

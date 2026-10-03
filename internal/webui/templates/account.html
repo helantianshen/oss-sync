@@ -60,6 +60,15 @@
         <input type="number" name="upload_size_mb" min="1" max="{{.Data.MaxUploadSizeMB}}" value="{{.Data.UploadSizeMB}}" required>
         <small>{{.Layout.T "account.upload_limit_note" .Data.MaxUploadSizeMB}}</small>
       </label>
+      <label>
+         <span>{{.Layout.T "account.page_size"}}</span>
+        <select name="page_size">
+          {{range .Layout.PageSizeOptions}}
+          <option value="{{.}}" {{if eq . $.Layout.SelectedPageSize}}selected{{end}}>{{.}}</option>
+          {{end}}
+        </select>
+        <small>{{.Layout.T "account.page_size_note"}}</small>
+      </label>
        <button class="button button--primary" type="submit">{{.Layout.T "account.save_preferences"}}</button>
     </form>
   </article>

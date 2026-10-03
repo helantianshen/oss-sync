@@ -45,6 +45,13 @@ type historyData struct {
 	Filters  historyFilters
 	History  []historyRow
 	Error    string
+	Page     Page
+	PageSize int
+}
+
+func (d historyData) paginationPage() Page { return d.Page }
+func (d historyData) paginationBasePath() string {
+	return "/dashboard/vaults/" + d.VaultID + "/history"
 }
 
 func parseHistoryFilters(values url.Values, location *time.Location) (historyFilters, error) {
@@ -128,12 +135,26 @@ func (h *Handler) historyPage(c *gin.Context) {
 		}
 		d.FilePath = filePath
 	}
+	user := h.webUser(c)
+	var setting models.UserSetting
+	if err := h.DB.Where("user_id = ?", user.ID).First(&setting).Error; err != nil && !errorsIsNotFound(err) {
+		h.renderVaultStatus(c, http.StatusInternalServerError, ld, "vault-history", h.t(c, "page.vault_history", vault.Name), d)
+		return
+	}
+	d.PageSize = h.userPageSize(c, &setting)
 	query := h.DB.Where("vault_id = ?", vault.ID)
 	if d.FilePath != "" {
 		query = query.Where("file_path = ?", d.FilePath)
 	}
+	var total int64
+	if err := filters.apply(query.Model(&models.FileHistory{})).Count(&total).Error; err != nil {
+		h.renderVaultStatus(c, http.StatusInternalServerError, ld, "vault-history", h.t(c, "page.vault_history", vault.Name), d)
+		return
+	}
+	d.Page = h.currentPage(c, total, d.PageSize)
 	var rows []models.FileHistory
-	if err := filters.apply(query).Order("created_at desc").Limit(200).Find(&rows).Error; err != nil {
+	if err := filters.apply(query).Order("created_at desc, id desc").
+		Limit(d.PageSize).Offset(d.Page.Offset()).Find(&rows).Error; err != nil {
 		h.renderVaultStatus(c, http.StatusInternalServerError, ld, "vault-history", h.t(c, "page.vault_history", vault.Name), d)
 		return
 	}

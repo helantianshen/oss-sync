@@ -20,7 +20,7 @@
         <span class="eyebrow">Identity ledger</span>
         <h2>{{.Layout.T "admin.registered_accounts"}}</h2>
       </div>
-      <span class="ledger-count">{{.Data.UserCount}} records</span>
+      {{template "pagination-toolbar" .}}
     </header>
     <div class="table-wrap">
       <table>
@@ -59,6 +59,7 @@
         </tbody>
       </table>
     </div>
+    {{template "pagination" .}}
   </article>
 </div>
 

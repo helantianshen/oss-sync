@@ -14,6 +14,7 @@ import type { ConflictResolution } from "./conflict-modal.js";
 import type { Diagnostics } from "./diagnostics.js";
 import { localizeError } from "./localized-error.js";
 import type OSSPlugin from "./main.js";
+import { NoticeGuard } from "./notice-guard.js";
 import { baselineFromAcknowledgement } from "./ordinary-sync-baseline.js";
 import { isOrdinarySyncConflict409 } from "./ordinary-sync-conflict-409.js";
 import { OrdinarySyncConflictResolver } from "./ordinary-sync-conflict-resolver.js";
@@ -70,6 +71,8 @@ export class SyncEngine {
   private effectiveMode: "short_poll" | "long_poll" = "short_poll";
   private longPollGen = 0;
   private longPollController: AbortController | null = null;
+  /** 同步失败提示的冷却抑制，成功一次后清零，使下一次失败能立即反馈 */
+  private readonly errorNotices = new NoticeGuard();
 
   constructor(
     app: App,
@@ -170,7 +173,10 @@ export class SyncEngine {
           durationMs: Date.now() - startedAt,
           failed: true,
         });
-        new Notice(this.plugin.t("sync.longPollFailed", { error: this.localizedError(error) }));
+        // 轮询失败按 key 抑制冷却，长轮询与 runOnce 共享同一 key 的同一次提示
+        if (this.errorNotices.shouldShow("sync.run")) {
+          new Notice(this.plugin.t("sync.longPollFailed", { error: this.localizedError(error) }));
+        }
         await sleep(3000);
       }
     }
@@ -374,6 +380,7 @@ export class SyncEngine {
       if (this.api.isClockDriftLarge()) {
         new Notice(this.plugin.t("sync.clockDrift", { seconds: Math.round(this.api.getTimeOffset() / 1000) }), 8000);
       }
+      this.errorNotices.reset();
       this.plugin.setSyncState("idle");
       return true;
     } catch (error: unknown) {
@@ -386,7 +393,10 @@ export class SyncEngine {
       });
       const message = this.localizedError(error);
       this.plugin.setSyncState("error", message);
-      new Notice(this.plugin.t("sync.error", { error: message }), 8000);
+      // 轮询与手动同步共用该路径，冷却期内重复失败只提示一次，状态栏持续展示
+      if (this.errorNotices.shouldShow("sync.run")) {
+        new Notice(this.plugin.t("sync.error", { error: message }), 8000);
+      }
       return false;
     }
   }

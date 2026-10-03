@@ -97,6 +97,24 @@ func TestValidateManifestRejectsUnsafePluginThemeResource(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsUnsafeUpdateMetadata(t *testing.T) {
+	t.Parallel()
+	base := Manifest{
+		ID: "update-metadata", Name: "Update metadata", Version: "1.0.0", APIVersion: CurrentAPIVersion,
+		Routes: []RouteSpec{{Method: "GET", Path: "/hello", Public: true}},
+	}
+	unsafeURL := base
+	unsafeURL.UpdateURL = "http://example.com/plugin.json"
+	if err := ValidateManifest(unsafeURL); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("ValidateManifest() unsafe update URL error = %v, want ErrInvalidManifest", err)
+	}
+	unknownVisibility := base
+	unknownVisibility.SettingsVisibility = "sometimes"
+	if err := ValidateManifest(unknownVisibility); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("ValidateManifest() unknown settings visibility error = %v, want ErrInvalidManifest", err)
+	}
+}
+
 func TestPluginRequestIncludesVaultSettings(t *testing.T) {
 	raw, err := json.Marshal(PluginRequest{Method: "GET", Path: "/hello", Settings: map[string]any{"endpoint": "https://example.com"}})
 	if err != nil {

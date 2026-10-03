@@ -58,6 +58,32 @@ type Manifest struct {
 	Args          []string                 `json:"args,omitempty"`
 	BlogThemes    []ThemeResource          `json:"blog_themes,omitempty"`
 	ConsoleThemes []ThemeResource          `json:"console_themes,omitempty"`
+	// SettingsVisibility 声明设置入口在侧边栏的可见范围，空值按主题类资源是否被使用推导
+	SettingsVisibility string `json:"settings_visibility,omitempty"`
+	// UpdateURL 是作者提供的版本查询接口，返回 {"version":"x.y.z","url":"...","notes":"..."}
+	// 缺省时宿主不提供更新检查，作者需自行在插件内实现
+	UpdateURL string `json:"update_url,omitempty"`
+	// AutoCheckUpdate 声明宿主是否自动检查该插件的更新，缺省 false
+	AutoCheckUpdate bool `json:"auto_check_update,omitempty"`
+}
+
+// 设置入口可见范围取值
+const (
+	// SettingsVisibilityAlways 启用即显示，不依赖模板或主题是否被选用
+	SettingsVisibilityAlways = "always"
+	// SettingsVisibilityWhenUsed 仅当插件提供的模板或主题被某个仓库选用时显示
+	SettingsVisibilityWhenUsed = "when_used"
+)
+
+// SettingsVisibleWhenUsed 判断设置入口是否应跟随模板与主题的实际使用情况
+// 未声明时默认 when_used：模板与插件资源只有被选用才出现对应设置项
+func (m Manifest) SettingsVisibleWhenUsed() bool {
+	return m.SettingsVisibility != SettingsVisibilityAlways
+}
+
+// HasThemeResources 判断插件是否提供博客或控制台主题资源
+func (m Manifest) HasThemeResources() bool {
+	return len(m.BlogThemes) > 0 || len(m.ConsoleThemes) > 0
 }
 
 // ThemeResource 声明插件包中的主题资源
@@ -152,6 +178,12 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	if len(manifest.Description) > 2000 {
 		return fmt.Errorf("%w: description is too long", ErrInvalidManifest)
+	}
+	if manifest.SettingsVisibility != "" && manifest.SettingsVisibility != SettingsVisibilityAlways && manifest.SettingsVisibility != SettingsVisibilityWhenUsed {
+		return fmt.Errorf("%w: unsupported settings_visibility %q", ErrInvalidManifest, manifest.SettingsVisibility)
+	}
+	if manifest.UpdateURL != "" && !validPluginUpdateURL(manifest.UpdateURL) {
+		return fmt.Errorf("%w: update_url must use https or loopback http", ErrInvalidManifest)
 	}
 	if manifest.APIVersion != CurrentAPIVersion {
 		return fmt.Errorf("%w: unsupported api_version %d", ErrInvalidManifest, manifest.APIVersion)

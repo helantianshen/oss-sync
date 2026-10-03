@@ -16,6 +16,7 @@ import { CollaborationRemoteSync } from "./collaboration-remote-sync.js";
 import { CollaborationSyncCoordinator } from "./collaboration-sync-coordinator.js";
 import { CollaborationTransport } from "./collaboration-transport.js";
 import { createOperationID } from "./operation-id.js";
+import { NoticeGuard } from "./notice-guard.js";
 
 export { COLLAB_DIR, collabLocalPath, isCollabPath };
 
@@ -26,6 +27,8 @@ export class CollabManager {
   private readonly remoteSync: CollaborationRemoteSync;
   private readonly coordinator = new CollaborationSyncCoordinator();
   private readonly transport: CollaborationTransport;
+  /** 协作列表刷新由长轮询驱动，失败提示按 key 冷却抑制 */
+  private readonly loadNotices = new NoticeGuard();
 
   constructor(
     private readonly app: App,
@@ -76,6 +79,7 @@ export class CollabManager {
   stop(): void {
     this.transport.stop();
     this.fileSync.stop();
+    this.loadNotices.reset();
   }
 
   isRunning(): boolean {
@@ -158,7 +162,10 @@ export class CollabManager {
       this.onChange();
       await this.remoteSync.refresh();
     } catch (error) {
-      new Notice(this.plugin.t("collab.loadFailed", { error: errorMessage(error, this.plugin) }));
+      // 协作列表刷新由长轮询周期性驱动，失败提示走冷却抑制，状态栏与侧边栏持续展示
+      if (this.loadNotices.shouldShow("collab.list")) {
+        new Notice(this.plugin.t("collab.loadFailed", { error: errorMessage(error, this.plugin) }));
+      }
     }
   }
 

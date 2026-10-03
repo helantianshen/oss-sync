@@ -85,6 +85,16 @@ type layoutData struct {
 	Language         string
 	CSPNonce         string
 	ContentHTML      template.HTML
+	// Pagination 是控制台列表共享的分页控件数据
+	Pagination Page
+	// PaginationBasePath 是分页链接的基础路径，PageURL 依此构造页码链接
+	PaginationBasePath string
+	// PageSizeOptions 是用户可选的每页条数
+	PageSizeOptions []int
+	// SelectedPageSize 是当前生效的每页条数
+	SelectedPageSize int
+	// Query 是当前请求的查询参数，供分页链接与每页条数表单保留过滤条件
+	Query url.Values
 }
 
 func (ld layoutData) T(key string, args ...any) string {
@@ -102,9 +112,10 @@ type pluginNav struct {
 	Name string
 }
 
-// New 解析控制台模板并创建网页处理器
-func New(db *gorm.DB, cfg *config.Config) (*Handler, error) {
-	funcs := template.FuncMap{
+// templateFuncs 返回控制台模板共用的函数表
+// 新增模板函数时必须同步这里，否则各测试的独立 FuncMap 会漏定义
+func templateFuncs() template.FuncMap {
+	return template.FuncMap{
 		"formatBytes": formatBytes,
 		"timeFmt": func(t time.Time) string {
 			if t.IsZero() {
@@ -113,8 +124,15 @@ func New(db *gorm.DB, cfg *config.Config) (*Handler, error) {
 			return t.Local().Format("2006-01-02 15:04")
 		},
 		"sub":      func(a, b int) int { return a - b },
+		"add":      func(a, b int) int { return a + b },
 		"urlquery": url.QueryEscape,
+		"PageURL":  PageURL,
 	}
+}
+
+// New 解析控制台模板并创建网页处理器
+func New(db *gorm.DB, cfg *config.Config) (*Handler, error) {
+	funcs := templateFuncs()
 	tpl, err := template.New("web").Funcs(funcs).ParseFS(webFS,
 		"templates/layout.html",
 		"templates/partials/*.html",
@@ -218,12 +236,15 @@ func (h *Handler) Register(r *gin.Engine) {
 		adminGroup.POST("/system/update/check", h.adminUpdateCheck)
 		adminGroup.POST("/system/update", h.adminUpdateTrigger)
 		adminGroup.GET("/plugins", h.adminPluginsPage)
+		adminGroup.GET("/plugins/guide.md", h.adminPluginGuideMarkdown)
 		adminGroup.POST("/plugins/upload", h.adminPluginUpload)
 		adminGroup.POST("/plugins/:id/enable", h.adminPluginEnable)
 		adminGroup.POST("/plugins/:id/disable", h.adminPluginDisable)
 		adminGroup.POST("/plugins/:id/delete", h.adminPluginDelete)
 		adminGroup.POST("/plugins/:id/files/save", h.adminPluginFileSave)
 		adminGroup.GET("/plugins/:id/page/:slug", h.adminPluginPage)
+		adminGroup.POST("/plugins/:id/update-check", h.adminPluginUpdateCheck)
+		adminGroup.POST("/plugins/:id/update", h.adminPluginUpdate)
 		adminGroup.GET("/backups/:id/download", h.downloadBackup)
 		adminGroup.POST("/backups/:id/delete", h.deleteBackup)
 	}
@@ -415,10 +436,30 @@ func (h *Handler) t(c *gin.Context, key string, args ...any) string {
 
 // 渲染
 
+// paginatedData 由需要分页控件的页面数据实现，render 据此填充布局分页字段
+type paginatedData interface {
+	paginationPage() Page
+	paginationBasePath() string
+}
+
+func (h *Handler) applyPagination(c *gin.Context, ld *layoutData, data any) {
+	ld.Query = c.Request.URL.Query()
+	ld.PageSizeOptions = AllowedPageSizes
+	ld.SelectedPageSize = DefaultPageSize
+	paginated, ok := data.(paginatedData)
+	if !ok {
+		return
+	}
+	ld.Pagination = paginated.paginationPage()
+	ld.SelectedPageSize = ld.Pagination.PageSize
+	ld.PaginationBasePath = paginated.paginationBasePath()
+}
+
 // render 使用统一布局渲染控制台页面；page 为页面模板名
 func (h *Handler) render(c *gin.Context, status int, page, title, activeGroup, activePage string, data any) {
 	u := h.webUser(c)
 	ld := layoutData{Page: page, Title: title, Username: "", IsAdmin: false, ShowSidebar: u != nil, ActiveGroup: activeGroup, ActivePage: activePage}
+	h.applyPagination(c, &ld, data)
 	if u != nil {
 		ld.Username = u.Username
 		ld.IsAdmin = u.Role == "admin"
@@ -442,11 +483,24 @@ func (h *Handler) render(c *gin.Context, status int, page, title, activeGroup, a
 }
 
 // setPluginNavigationForUser 构造插件设置导航
+// 插件通过 manifest 的 settings_visibility 声明可见范围：
+//   - always：插件启用即显示，不依赖模板或主题是否被选用（纯功能插件）
+//   - when_used 或缺省：仅当插件的博客/控制台主题资源被某个仓库选用时显示
 func (h *Handler) setPluginNavigationForUser(ld *layoutData, u *models.User) {
+	if u == nil {
+		return
+	}
+	usedThemes := h.usedThemeNames(u)
 	for _, manifest := range serverplugin.BuiltinManifests() {
-		if manifest.ID == "papertrail-settings" && len(manifest.Settings) > 0 && len(h.pluginSettingVaults(u, manifest.ID)) > 0 {
+		if len(manifest.Settings) == 0 {
+			continue
+		}
+		if !manifest.SettingsVisibleWhenUsed() {
 			ld.PluginSettings = append(ld.PluginSettings, pluginNav{ID: manifest.ID, Name: manifest.Name})
-			break
+			continue
+		}
+		if theme := builtinThemeForBuiltinPlugin(manifest.ID); theme != "" && usedThemes[theme] {
+			ld.PluginSettings = append(ld.PluginSettings, pluginNav{ID: manifest.ID, Name: manifest.Name})
 		}
 	}
 	var plugins []models.ServerPlugin
@@ -455,15 +509,77 @@ func (h *Handler) setPluginNavigationForUser(ld *layoutData, u *models.User) {
 	}
 	for _, plugin := range plugins {
 		manifest, err := serverplugin.ParseManifest([]byte(plugin.ManifestJSON))
+		if err != nil {
+			// manifest 解析失败时仍允许插件运行期注册的设置生效
+			manifest = serverplugin.Manifest{ID: plugin.ID, Name: plugin.Name}
+		}
 		if h.pluginManager != nil {
 			if registration, ok := h.pluginManager.RegistrationFor(plugin.ID); ok && len(registration.Settings) > 0 {
 				manifest.Settings = registration.Settings
 			}
 		}
-		if err == nil && len(manifest.Settings) > 0 {
+		if len(manifest.Settings) == 0 {
+			continue
+		}
+		if !manifest.SettingsVisibleWhenUsed() {
+			ld.PluginSettings = append(ld.PluginSettings, pluginNav{ID: plugin.ID, Name: plugin.Name})
+			continue
+		}
+		if !manifest.HasThemeResources() {
+			ld.PluginSettings = append(ld.PluginSettings, pluginNav{ID: plugin.ID, Name: plugin.Name})
+			continue
+		}
+		if h.pluginThemeInUse(manifest, usedThemes) {
 			ld.PluginSettings = append(ld.PluginSettings, pluginNav{ID: plugin.ID, Name: plugin.Name})
 		}
 	}
+}
+
+// usedThemeNames 返回当前用户可访问仓库已选用的博客与控制台主题名集合
+func (h *Handler) usedThemeNames(u *models.User) map[string]bool {
+	used := make(map[string]bool)
+	var vaultIDs []string
+	for _, vault := range h.accessibleVaults(u) {
+		vaultIDs = append(vaultIDs, vault.ID)
+	}
+	if len(vaultIDs) == 0 {
+		return used
+	}
+	var settings []models.VaultSetting
+	if err := h.DB.Where("vault_id IN ?", vaultIDs).Find(&settings).Error; err != nil {
+		return used
+	}
+	for _, setting := range settings {
+		if setting.ThemeName != "" {
+			used[setting.ThemeName] = true
+		}
+	}
+	var userSettings []models.UserSetting
+	if err := h.DB.Where("user_id = ?", u.ID).Find(&userSettings).Error; err == nil {
+		for _, setting := range userSettings {
+			if setting.ConsoleThemeName != "" {
+				used[setting.ConsoleThemeName] = true
+			}
+		}
+	}
+	return used
+}
+
+// pluginThemeInUse 判断插件的主题资源是否有任意一个被选用
+// 仓库保存的 theme_name 是 ThemeResource.Key(pluginID)（形如 <plugin>--<resource>），
+// 同时兼容早期直接按资源名保存的数据
+func (h *Handler) pluginThemeInUse(manifest serverplugin.Manifest, usedThemes map[string]bool) bool {
+	for _, theme := range manifest.BlogThemes {
+		if usedThemes[theme.Key(manifest.ID)] || usedThemes[theme.Name] || usedThemes[theme.ID] {
+			return true
+		}
+	}
+	for _, theme := range manifest.ConsoleThemes {
+		if usedThemes[theme.Key(manifest.ID)] || usedThemes[theme.Name] || usedThemes[theme.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // accessibleVaults 返回当前用户可访问的仓库，默认仓库排在前面

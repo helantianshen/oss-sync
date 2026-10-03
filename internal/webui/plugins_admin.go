@@ -21,10 +21,17 @@ import (
 type adminPluginsData struct {
 	Plugins   []serverplugin.PluginInfo
 	GuideHTML template.HTML
-	Error     string
-	Saved     bool
-	EditID    string
-	EditFiles []serverplugin.EditablePluginFile
+	// GuideSource 是插件指南的 Markdown 原文，注入 script[type=text/plain] 供复制使用
+	GuideSource string
+	Error       string
+	Saved       bool
+	EditID      string
+	EditFiles   []serverplugin.EditablePluginFile
+	// Updates 是 manifest 声明更新源且有新版本的插件，key 为插件 ID
+	Updates map[string]serverplugin.PluginUpdateInfo
+	// Updated 与 UpdatedVersion 描述刚完成的一次更新，用于成功提示
+	Updated        string
+	UpdatedVersion string
 }
 
 func (h *Handler) adminPluginPage(c *gin.Context) {
@@ -92,6 +99,10 @@ func pluginAdminPageTitle(pages []serverplugin.PluginAdminPage, pluginID, slug s
 
 func (h *Handler) adminPluginsPage(c *gin.Context) {
 	d := adminPluginsData{Error: c.Query("error"), Saved: c.Query("saved") == "1"}
+	if updated := strings.TrimSpace(c.Query("updated")); updated != "" {
+		d.Updated = updated
+		d.UpdatedVersion = strings.TrimSpace(c.Query("latest"))
+	}
 	guideName := "assets/plugin-guide.md"
 	if h.userLang(c) == "zh" {
 		guideName = "assets/plugin-guide.zh.md"
@@ -100,6 +111,7 @@ func (h *Handler) adminPluginsPage(c *gin.Context) {
 		if guide, renderErr := markdown.RenderMarkdown(nil, string(source)); renderErr == nil {
 			d.GuideHTML = template.HTML(guide)
 		}
+		d.GuideSource = string(source)
 	}
 	if h.pluginManager == nil {
 		d.Error = h.t(c, "admin.plugins_unavailable")
@@ -119,6 +131,13 @@ func (h *Handler) adminPluginsPage(c *gin.Context) {
 		if err != nil {
 			d.Error = err.Error()
 			d.EditID = ""
+		}
+	}
+	// 查询参数可直接带入一次检查结果，无需每次渲染都请求作者接口
+	if available := strings.TrimSpace(c.Query("update")); available != "" {
+		latest := strings.TrimSpace(c.Query("latest"))
+		d.Updates = map[string]serverplugin.PluginUpdateInfo{
+			available: {PluginID: available, Latest: latest, HasUpdate: latest != "", UpdatableHere: true},
 		}
 	}
 	h.render(c, http.StatusOK, "admin-plugins", h.t(c, "page.admin_plugins"), "admin", "admin-plugins", d)
@@ -244,6 +263,90 @@ func (h *Handler) adminPluginDelete(c *gin.Context) {
 	c.Redirect(http.StatusSeeOther, "/dashboard/admin/plugins?saved=1")
 }
 
+// adminPluginGuideMarkdown 按当前语言导出插件指南原文，供作者下载后离线查阅
+func (h *Handler) adminPluginGuideMarkdown(c *gin.Context) {
+	guideName := "assets/plugin-guide.md"
+	if h.userLang(c) == "zh" {
+		guideName = "assets/plugin-guide.zh.md"
+	}
+	source, err := webFS.ReadFile(guideName)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="plugin-guide.md"`)
+	c.Data(http.StatusOK, "text/markdown; charset=utf-8", source)
+}
+
+func (h *Handler) adminPluginUpdateCheck(c *gin.Context) {
+	if h.pluginManager == nil {
+		h.redirectPluginError(c, "admin.plugins_unavailable")
+		return
+	}
+	updates, err := h.pluginManager.CheckPluginUpdates(c.Request.Context())
+	if err != nil {
+		h.redirectPluginError(c, "admin.plugin_update_check_failed")
+		return
+	}
+	for _, update := range updates {
+		if update.PluginID != c.Param("id") {
+			continue
+		}
+		if update.CheckFailed {
+			h.redirectPluginError(c, "admin.plugin_update_check_failed")
+			return
+		}
+		if !update.HasUpdate {
+			h.redirectPluginError(c, "admin.plugin_up_to_date")
+			return
+		}
+		if !update.UpdatableHere {
+			h.redirectPluginMessage(c, h.t(c, "admin.plugin_update_manual", update.Latest))
+			return
+		}
+		c.Redirect(http.StatusSeeOther, "/dashboard/admin/plugins?update="+
+			url.QueryEscape(update.PluginID)+"&latest="+url.QueryEscape(update.Latest))
+		return
+	}
+	h.redirectPluginError(c, "admin.plugin_no_update_source")
+}
+
+func (h *Handler) adminPluginUpdate(c *gin.Context) {
+	if h.pluginManager == nil {
+		h.redirectPluginError(c, "admin.plugins_unavailable")
+		return
+	}
+	updates, err := h.pluginManager.CheckPluginUpdates(c.Request.Context())
+	if err != nil {
+		h.redirectPluginError(c, "admin.plugin_update_check_failed")
+		return
+	}
+	for _, update := range updates {
+		if update.PluginID != c.Param("id") {
+			continue
+		}
+		if update.CheckFailed {
+			h.redirectPluginError(c, "admin.plugin_update_check_failed")
+			return
+		}
+		if !update.UpdatableHere {
+			continue
+		}
+		if _, updateErr := h.pluginManager.PluginUpdateFromURL(c.Request.Context(), update.PluginID, update.Latest, update.DownloadURL); updateErr != nil {
+			h.redirectPluginError(c, "admin.plugin_update_failed")
+			return
+		}
+		c.Redirect(http.StatusSeeOther, "/dashboard/admin/plugins?updated="+url.QueryEscape(update.PluginID)+"&latest="+url.QueryEscape(update.Latest))
+		return
+	}
+	h.redirectPluginError(c, "admin.plugin_no_update_source")
+}
+
 func (h *Handler) redirectPluginError(c *gin.Context, key string) {
 	c.Redirect(http.StatusSeeOther, "/dashboard/admin/plugins?error="+url.QueryEscape(h.t(c, key)))
+}
+
+// redirectPluginMessage 直接重定向到已在调用处完成插值的提示文本
+func (h *Handler) redirectPluginMessage(c *gin.Context, message string) {
+	c.Redirect(http.StatusSeeOther, "/dashboard/admin/plugins?error="+url.QueryEscape(message))
 }

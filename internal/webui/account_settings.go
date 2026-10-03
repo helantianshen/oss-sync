@@ -38,7 +38,15 @@ type accountData struct {
 	ConsoleThemes           []consoletheme.Info
 	ConsoleThemeSaved       bool
 	WebLanguage             string
+	PageSize                int
 }
+
+// accountData 实现 paginatedData，使账户页能显示当前每页条数
+func (d accountData) paginationPage() Page {
+	return Page{Page: 1, PageSize: d.PageSize, Total: 0, TotalPages: 1}
+}
+
+func (d accountData) paginationBasePath() string { return "/dashboard/account" }
 
 type userPreferencesInputError struct {
 	Message string
@@ -93,6 +101,7 @@ func (h *Handler) saveAccountSettings(c *gin.Context) {
 			"default_recycle_bin_days": preferences.RecycleBinDays,
 			"vault_storage_bytes":      preferences.VaultStorageBytes,
 			"upload_size_bytes":        preferences.UploadSizeBytes,
+			"page_size":                resolvePageSize(c.PostForm("page_size"), ""),
 		}).Error
 	})
 	if err != nil {
@@ -138,6 +147,7 @@ func (h *Handler) loadAccountData(user *models.User) (accountData, error) {
 	if data.WebLanguage != "en" {
 		data.WebLanguage = "zh"
 	}
+	data.PageSize = resolvePageSize("", strconv.Itoa(setting.PageSize))
 	if data.ConsoleThemeName == "" || !consoletheme.Exists(h.Cfg.Storage.DataDir, data.ConsoleThemeName) {
 		data.ConsoleThemeName = consoletheme.BuiltinDefault
 	}

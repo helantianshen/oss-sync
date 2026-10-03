@@ -17,6 +17,8 @@ func init() {
 		"account.upload_limit":              {"单文件上传大小（MiB）", "Single-file upload limit (MiB)"},
 		"account.upload_limit_note":         {"管理员上限：%d MiB。", "Administrator limit: %d MiB."},
 		"account.save_preferences":          {"保存偏好", "Save preferences"},
+		"account.page_size":                 {"列表每页条数", "List page size"},
+		"account.page_size_note":            {"影响用户、仓库、设备、历史等控制台列表；也可在列表页临时调整。", "Applies to console lists such as users, vaults, devices, and history. You can also change it temporarily on any list page."},
 		"account.web_language":              {"网页语言", "Web language"},
 		"account.web_language_description":  {"保存后，所有网页登录默认使用此语言。", "This language is used for every web-console sign-in."},
 		"account.language_label":            {"语言", "Language"},

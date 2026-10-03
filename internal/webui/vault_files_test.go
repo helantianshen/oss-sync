@@ -12,7 +12,7 @@ import (
 func TestVaultFilesTemplate_whenRendered_exposesManagementAndPerFileHistoryLinks(t *testing.T) {
 	t.Parallel()
 
-	tpl, err := template.New("web").Funcs(template.FuncMap{"formatBytes": formatBytes}).
+	tpl, err := template.New("web").Funcs(templateFuncs()).
 		ParseFS(webFS, "templates/vault_files.html")
 	if err != nil {
 		t.Fatalf("parse vault files template: %v", err)

@@ -106,3 +106,66 @@ test("network connection refusal is localized without replacing server error det
     await cleanup();
   }
 });
+
+test("redirect loops from unauthenticated requests are reported as connection failures", async () => {
+  const { localizeError, cleanup } = await loadLocalizedError();
+  try {
+    const t = (key) => ({ "auth.unauthorized": "连接失败" })[key] ?? key;
+    assert.equal(localizeError(new Error("net::ERR_TOO_MANY_REDIRECTS"), t, "未知错误"), "连接失败");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("401 and 403 are not misreported as wrong credentials", async () => {
+  const { localizeError, cleanup } = await loadLocalizedError();
+  try {
+    const t = (key) => ({
+      "auth.unauthorized": "连接失败",
+      "auth.forbidden": "连接失败",
+      "auth.invalidCredentials": "用户名或密码错误",
+    })[key] ?? key;
+    class ApiError extends Error {
+      constructor(message, status) {
+        super(message);
+        this.status = status;
+      }
+    }
+
+    assert.equal(localizeError(new ApiError("unauthorized: invalid credentials", 401), t, "未知错误"), "连接失败");
+    assert.equal(localizeError(new ApiError("invalid jwt token", 401), t, "未知错误"), "连接失败");
+    assert.equal(localizeError(new ApiError("forbidden", 403), t, "未知错误"), "连接失败");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("token expiry on 401 still resolves to the login prompt", async () => {
+  const { localizeError, cleanup } = await loadLocalizedError();
+  try {
+    const t = (key) => ({
+      "auth.tokenExpired": "登录已过期",
+      "auth.unauthorized": "连接失败",
+    })[key] ?? key;
+    class ApiError extends Error {
+      constructor(message) {
+        super(message);
+        this.status = 401;
+      }
+    }
+
+    assert.equal(localizeError(new ApiError("jwt token expired"), t, "未知错误"), "登录已过期");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("unrelated server prose is still surfaced verbatim", async () => {
+  const { localizeError, cleanup } = await loadLocalizedError();
+  try {
+    const t = (key) => key;
+    assert.equal(localizeError(new Error("vault quota exceeded"), t, "未知错误"), "vault quota exceeded");
+  } finally {
+    await cleanup();
+  }
+});

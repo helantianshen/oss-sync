@@ -82,9 +82,7 @@ func TestParseUserPreferences_whenValueExceedsAdministratorCeiling_returnsError(
 func TestAccountTemplate_whenRendered_exposesConstrainedPreferenceControls(t *testing.T) {
 	t.Parallel()
 
-	tpl, err := template.New("web").Funcs(template.FuncMap{
-		"timeFmt": func(value time.Time) string { return value.Format("2006-01-02 15:04") },
-	}).ParseFS(webFS, "templates/account.html")
+	tpl, err := template.New("web").Funcs(templateFuncs()).ParseFS(webFS, "templates/account.html")
 	if err != nil {
 		t.Fatalf("parse account template: %v", err)
 	}
@@ -127,9 +125,7 @@ func TestAccountTemplate_whenRendered_exposesConstrainedPreferenceControls(t *te
 func TestAccountTemplate_whenRenderedWithEnglish_exposesEnglishCopy(t *testing.T) {
 	t.Parallel()
 
-	tpl, err := template.New("web").Funcs(template.FuncMap{
-		"timeFmt": func(value time.Time) string { return value.Format("2006-01-02 15:04") },
-	}).ParseFS(webFS, "templates/account.html")
+	tpl, err := template.New("web").Funcs(templateFuncs()).ParseFS(webFS, "templates/account.html")
 	if err != nil {
 		t.Fatalf("parse account template: %v", err)
 	}

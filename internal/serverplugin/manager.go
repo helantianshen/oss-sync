@@ -1,11 +1,16 @@
 package serverplugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,18 +22,21 @@ import (
 
 	"github.com/helantianshen/oss-sync/internal/blog"
 	"github.com/helantianshen/oss-sync/internal/models"
+	"github.com/helantianshen/oss-sync/internal/version"
 )
 
 // PluginInfo 是已安装服务端插件面向管理面的安全视图
 type PluginInfo struct {
 	Manifest
-	Enabled            bool
-	LastError          string
-	WasmHash           string
-	ManifestHash       string
-	WasmSize           int64
-	PayloadHash        string
-	PayloadSize        int64
+	Enabled      bool
+	LastError    string
+	WasmHash     string
+	ManifestHash string
+	WasmSize     int64
+	PayloadHash  string
+	PayloadSize  int64
+	// InstalledBytes 是插件目录在磁盘上的实际占用，含运行期产生的数据
+	InstalledBytes     int64
 	InstalledAt        time.Time
 	UpdatedAt          time.Time
 	Associations       []PluginAssociation
@@ -225,9 +233,191 @@ func (m *Manager) List() ([]PluginInfo, error) {
 			info.Runtime = RuntimeWASM
 		}
 		info.Builtin = record.Builtin
+		info.InstalledBytes = installedPackageBytes(filepath.Join(m.root, record.ID))
 		plugins = append(plugins, info)
 	}
 	return plugins, nil
+}
+
+// installedPackageBytes 统计插件目录在磁盘上的实际占用
+// 插件可能在运行期持续写入数据，安装时记录的 payload 大小无法反映真实占用
+func installedPackageBytes(dir string) int64 {
+	var total int64
+	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if info, infoErr := entry.Info(); infoErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// PluginUpdateInfo 是单个插件的可用更新
+type PluginUpdateInfo struct {
+	PluginID      string `json:"plugin_id"`
+	Current       string `json:"current_version"`
+	Latest        string `json:"latest_version"`
+	DownloadURL   string `json:"download_url,omitempty"`
+	Notes         string `json:"notes,omitempty"`
+	HasUpdate     bool   `json:"has_update"`
+	UpdatableHere bool   `json:"updatable"`
+	CheckFailed   bool   `json:"check_failed,omitempty"`
+}
+
+func validPluginUpdateURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "https":
+		return true
+	case "http":
+		host := parsed.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	default:
+		return false
+	}
+}
+
+func pluginUpdateHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			if !validPluginUpdateURL(req.URL.String()) {
+				return errors.New("plugin update redirect uses an unsafe URL")
+			}
+			return nil
+		},
+	}
+}
+
+// PluginUpdateFromURL 下载作者更新接口提供的 ZIP 并完成升级
+// 下载地址由 manifest 的 update_url 接口返回，仅限 https 或本机回环
+func (m *Manager) PluginUpdateFromURL(ctx context.Context, pluginID, expectedVersion, downloadURL string) (PluginInfo, error) {
+	if !validPluginUpdateURL(downloadURL) {
+		return PluginInfo{}, fmt.Errorf("plugin %s provides an unsafe download url", pluginID)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return PluginInfo{}, err
+	}
+	res, err := pluginUpdateHTTPClient(5 * time.Minute).Do(req)
+	if err != nil {
+		return PluginInfo{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return PluginInfo{}, fmt.Errorf("download plugin %s: status %d", pluginID, res.StatusCode)
+	}
+	content, err := io.ReadAll(io.LimitReader(res.Body, MaxArchiveBytes+1))
+	if err != nil {
+		return PluginInfo{}, err
+	}
+	if len(content) > MaxArchiveBytes {
+		return PluginInfo{}, fmt.Errorf("plugin package exceeds %d bytes", MaxArchiveBytes)
+	}
+	packageData, err := ParsePackage(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		return PluginInfo{}, err
+	}
+	if packageData.Manifest.ID != pluginID {
+		return PluginInfo{}, fmt.Errorf("plugin update id %q does not match %q", packageData.Manifest.ID, pluginID)
+	}
+	if order, compareErr := version.Compare(packageData.Manifest.Version, expectedVersion); compareErr != nil || order != 0 {
+		return PluginInfo{}, fmt.Errorf("plugin update version %q does not match %q", packageData.Manifest.Version, expectedVersion)
+	}
+	// 更新检查只覆盖已启用插件，Upgrade 会保留其启用状态并完成运行时恢复
+	return m.Upgrade(ctx, bytes.NewReader(content), int64(len(content)))
+}
+
+// CheckPluginUpdates 批量查询已启用插件声明的更新接口
+// updateURL 缺省的插件直接跳过：作者可自行在插件内实现更新
+func (m *Manager) CheckPluginUpdates(ctx context.Context) ([]PluginUpdateInfo, error) {
+	records := []models.ServerPlugin{}
+	if err := m.db.Where("enabled = ?", true).Order("id asc").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list plugins for update check: %w", err)
+	}
+	results := make([]PluginUpdateInfo, 0, len(records))
+	for _, record := range records {
+		info, err := infoFromRecord(record)
+		if err != nil {
+			continue
+		}
+		if info.UpdateURL == "" {
+			continue
+		}
+		entry := PluginUpdateInfo{PluginID: record.ID, Current: info.Version}
+		latest, downloadURL, notes, fetchErr := m.fetchPluginUpdate(ctx, info.UpdateURL)
+		if fetchErr != nil {
+			// 接口失败不阻塞其他插件的检查，也不写入错误状态
+			entry.CheckFailed = true
+			results = append(results, entry)
+			continue
+		}
+		entry.Latest = latest
+		entry.DownloadURL = downloadURL
+		entry.Notes = notes
+		entry.HasUpdate = latest != "" && versionGreater(latest, info.Version)
+		// 提供下载地址才能由宿主代理更新；否则提示作者自行更新
+		entry.UpdatableHere = entry.HasUpdate && downloadURL != ""
+		results = append(results, entry)
+	}
+	return results, nil
+}
+
+func (m *Manager) fetchPluginUpdate(ctx context.Context, updateURL string) (version, downloadURL, notes string, err error) {
+	if !validPluginUpdateURL(updateURL) {
+		return "", "", "", errors.New("plugin update endpoint uses an unsafe URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateURL, nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	client := pluginUpdateHTTPClient(10 * time.Second)
+	res, err := client.Do(req)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", "", "", fmt.Errorf("update endpoint status %d", res.StatusCode)
+	}
+	var payload struct {
+		Version     string `json:"version"`
+		DownloadURL string `json:"url"`
+		Notes       string `json:"notes"`
+	}
+	body, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if readErr != nil {
+		return "", "", "", readErr
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", "", "", err
+	}
+	if payload.DownloadURL != "" && !validPluginUpdateURL(strings.TrimSpace(payload.DownloadURL)) {
+		return "", "", "", errors.New("plugin download uses an unsafe URL")
+	}
+	return strings.TrimSpace(payload.Version), strings.TrimSpace(payload.DownloadURL), strings.TrimSpace(payload.Notes), nil
+}
+
+// versionGreater 按严格 SemVer 比较，非法版本视为不大于
+func versionGreater(candidate, current string) bool {
+	order, err := version.Compare(candidate, current)
+	if err != nil {
+		return false
+	}
+	return order > 0
 }
 
 func pluginAssociations(db *gorm.DB, pluginID string) []PluginAssociation {

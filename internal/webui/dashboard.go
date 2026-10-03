@@ -323,6 +323,7 @@ func (h *Handler) renderVaultStatus(c *gin.Context, status int, ld layoutData, p
 	}
 	ld.ActivePage = page
 	ld.ShowSidebar = true
+	h.applyPagination(c, &ld, data)
 	ld.Username = u.Username
 	ld.IsAdmin = u.Role == "admin"
 	ld.ConsoleThemeName = h.selectedConsoleTheme(u.ID)

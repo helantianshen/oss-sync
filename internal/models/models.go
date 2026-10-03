@@ -212,8 +212,10 @@ type UserSetting struct {
 	CustomHeader          string  `gorm:"type:text"`
 	CustomFooter          string  `gorm:"type:text"`
 	KeepDirectoryTree     bool    `gorm:"not null;default:true"`
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// PageSize 是控制台列表每页条数，0 表示使用默认值
+	PageSize    int       `gorm:"not null;default:0"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // File 存放 Vault 维度的文件元数据与同步墓碑

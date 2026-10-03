@@ -10,7 +10,7 @@
         <button type="button" class="button theme-switcher__btn" data-theme-pref="auto" aria-pressed="false">{{.Layout.T "common.theme_modes.system"}}</button>
         <button type="button" class="button theme-switcher__btn" data-theme-pref="light" aria-pressed="false">{{.Layout.T "common.theme_modes.light"}}</button>
         <button type="button" class="button theme-switcher__btn" data-theme-pref="dark" aria-pressed="false">{{.Layout.T "common.theme_modes.dark"}}</button>
-        <button type="button" class="button theme-switcher__btn language-switcher__btn" data-language-toggle data-language-target="{{if eq .Layout.Language "en"}}zh{{else}}en{{end}}" data-language-csrf="{{.Layout.CSRF}}">{{if eq .Layout.Language "en"}}{{.Layout.T "common.switch_to_chinese"}}{{else}}{{.Layout.T "common.switch_to_english"}}{{end}}</button>
+        <button type="button" class="button theme-switcher__btn" data-language-toggle data-language-target="{{if eq .Layout.Language "en"}}zh{{else}}en{{end}}" data-language-csrf="{{.Layout.CSRF}}">{{if eq .Layout.Language "en"}}{{.Layout.T "common.switch_to_chinese"}}{{else}}{{.Layout.T "common.switch_to_english"}}{{end}}</button>
       </div>
       <a class="quiet-link" href="/register">{{.Layout.T "auth.register_link"}}</a>
     </div>

@@ -113,7 +113,8 @@ async function replacePluginFiles(
 
   try {
     for (let i = 0; i < files.length; i++) {
-      await adapter.write(joinPath(dir, temps[i]), files[i].content);
+      // Obsidian 的 adapter.write 只接受字符串；插件三件套均为 UTF-8 可解码内容
+      await adapter.write(joinPath(dir, temps[i]), textOf(files[i].content));
     }
   } catch (error) {
     await removePaths(adapter, dir, temps);

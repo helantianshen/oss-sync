@@ -116,24 +116,37 @@ type adminUsersData struct {
 	Users      []adminUserRow
 	Error      string
 	Saved      bool
+	Page       Page
+	PageSize   int
 }
+
+func (d adminUsersData) paginationPage() Page       { return d.Page }
+func (d adminUsersData) paginationBasePath() string { return "/dashboard/admin" }
 
 func (h *Handler) adminUsersPage(c *gin.Context) {
 	d := adminUsersData{Error: c.Query("error"), Saved: c.Query("saved") == "1"}
-	var users []models.User
-	if err := h.DB.Order("created_at asc, id asc").Find(&users).Error; err != nil {
+	user := h.webUser(c)
+	var setting models.UserSetting
+	if err := h.DB.Where("user_id = ?", user.ID).First(&setting).Error; err != nil && !errorsIsNotFound(err) {
 		h.render(c, http.StatusInternalServerError, "admin-users", h.t(c, "page.admin_users"), "admin", "admin-users", d)
 		return
 	}
-	d.UserCount = len(users)
-	adminCount := 0
-	for _, u := range users {
-		if u.Role == "admin" {
-			adminCount++
-		}
+	d.PageSize = h.userPageSize(c, &setting)
+	var total int64
+	if err := h.DB.Model(&models.User{}).Count(&total).Error; err != nil {
+		h.render(c, http.StatusInternalServerError, "admin-users", h.t(c, "page.admin_users"), "admin", "admin-users", d)
+		return
 	}
-	d.AdminCount = adminCount
-	lastAdminID := h.lastAdminID(users)
+	d.Page = h.currentPage(c, total, d.PageSize)
+	d.UserCount = int(total)
+	// 管理员计数与最后管理员判定需要全量数据，与分页解耦
+	adminCount, lastAdminID := h.adminSummary()
+	d.AdminCount = int(adminCount)
+	var users []models.User
+	if err := h.DB.Order("created_at asc, id asc").Limit(d.PageSize).Offset(d.Page.Offset()).Find(&users).Error; err != nil {
+		h.render(c, http.StatusInternalServerError, "admin-users", h.t(c, "page.admin_users"), "admin", "admin-users", d)
+		return
+	}
 	for _, u := range users {
 		var vaultCount int64
 		var deviceCount int64
@@ -148,19 +161,17 @@ func (h *Handler) adminUsersPage(c *gin.Context) {
 	h.render(c, http.StatusOK, "admin-users", h.t(c, "page.admin_users"), "admin", "admin-users", d)
 }
 
-func (h *Handler) lastAdminID(users []models.User) uint {
-	var last uint
-	count := 0
-	for _, u := range users {
-		if u.Role == "admin" {
-			last = u.ID
-			count++
-		}
+// adminSummary 返回管理员总数与唯一管理员 ID
+// 分页后这两项必须基于全量数据，否则最后一页会误判能否删除管理员
+func (h *Handler) adminSummary() (int64, uint) {
+	var adminCount int64
+	h.DB.Model(&models.User{}).Where("role = ?", "admin").Count(&adminCount)
+	var admins []models.User
+	h.DB.Where("role = ?", "admin").Order("id asc").Find(&admins)
+	if len(admins) == 1 {
+		return adminCount, admins[0].ID
 	}
-	if count <= 1 {
-		return last
-	}
-	return 0 // 多个管理员时返回零值，允许操作任意管理员
+	return adminCount, 0
 }
 
 func (h *Handler) adminSetUserRole(c *gin.Context) {
@@ -270,16 +281,34 @@ type adminVaultsData struct {
 	VaultCount int
 	Vaults     []adminVaultRow
 	Error      string
+	Page       Page
+	PageSize   int
 }
+
+func (d adminVaultsData) paginationPage() Page       { return d.Page }
+func (d adminVaultsData) paginationBasePath() string { return "/dashboard/admin/vaults" }
 
 func (h *Handler) adminVaultsPage(c *gin.Context) {
 	d := adminVaultsData{Error: c.Query("error")}
-	var vaults []models.Vault
-	if err := h.DB.Order("created_at desc").Find(&vaults).Error; err != nil {
+	user := h.webUser(c)
+	var setting models.UserSetting
+	if err := h.DB.Where("user_id = ?", user.ID).First(&setting).Error; err != nil && !errorsIsNotFound(err) {
 		h.render(c, http.StatusInternalServerError, "admin-vaults", h.t(c, "page.admin_vaults"), "admin", "admin-vaults", d)
 		return
 	}
-	d.VaultCount = len(vaults)
+	d.PageSize = h.userPageSize(c, &setting)
+	var total int64
+	if err := h.DB.Model(&models.Vault{}).Count(&total).Error; err != nil {
+		h.render(c, http.StatusInternalServerError, "admin-vaults", h.t(c, "page.admin_vaults"), "admin", "admin-vaults", d)
+		return
+	}
+	d.Page = h.currentPage(c, total, d.PageSize)
+	d.VaultCount = int(total)
+	var vaults []models.Vault
+	if err := h.DB.Order("created_at desc, id desc").Limit(d.PageSize).Offset(d.Page.Offset()).Find(&vaults).Error; err != nil {
+		h.render(c, http.StatusInternalServerError, "admin-vaults", h.t(c, "page.admin_vaults"), "admin", "admin-vaults", d)
+		return
+	}
 	ownerIDs := make([]uint, 0, len(vaults))
 	for _, v := range vaults {
 		ownerIDs = append(ownerIDs, v.OwnerID)
@@ -444,16 +473,34 @@ func (h *Handler) adminVaultDetailPage(c *gin.Context) {
 
 // adminDevicesData 是管理员设备列表的页面数据
 type adminDevicesData struct {
-	Devices []adminDeviceRow
-	Error   string
-	Saved   bool
+	Devices  []adminDeviceRow
+	Error    string
+	Saved    bool
+	Page     Page
+	PageSize int
 }
+
+func (d adminDevicesData) paginationPage() Page       { return d.Page }
+func (d adminDevicesData) paginationBasePath() string { return "/dashboard/admin/devices" }
 
 func (h *Handler) adminDevicesPage(c *gin.Context) {
 	d := adminDevicesData{Error: c.Query("error"), Saved: c.Query("saved") == "1"}
+	user := h.webUser(c)
+	var setting models.UserSetting
+	if err := h.DB.Where("user_id = ?", user.ID).First(&setting).Error; err != nil && !errorsIsNotFound(err) {
+		h.render(c, http.StatusInternalServerError, "admin-devices", h.t(c, "page.admin_devices"), "admin", "admin-devices", d)
+		return
+	}
+	d.PageSize = h.userPageSize(c, &setting)
+	var total int64
+	if err := h.DB.Model(&models.ClientDevice{}).Where("status <> ?", deviceauth.DeviceStatusRevoked).Count(&total).Error; err != nil {
+		h.render(c, http.StatusInternalServerError, "admin-devices", h.t(c, "page.admin_devices"), "admin", "admin-devices", d)
+		return
+	}
+	d.Page = h.currentPage(c, total, d.PageSize)
 	var devices []models.ClientDevice
 	if err := h.DB.Where("status <> ?", deviceauth.DeviceStatusRevoked).
-		Order("created_at desc").Find(&devices).Error; err != nil {
+		Order("created_at desc, id desc").Limit(d.PageSize).Offset(d.Page.Offset()).Find(&devices).Error; err != nil {
 		h.render(c, http.StatusInternalServerError, "admin-devices", h.t(c, "page.admin_devices"), "admin", "admin-devices", d)
 		return
 	}

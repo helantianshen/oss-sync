@@ -18,7 +18,7 @@
         <span class="eyebrow">Vault registry</span>
         <h2>{{.Layout.T "admin.vault_list"}}</h2>
       </div>
-      <span class="ledger-count">{{len .Data.Vaults}} vaults</span>
+      {{template "pagination-toolbar" .}}
     </header>
     {{if .Data.Vaults}}
     <div class="table-wrap">
@@ -38,6 +38,7 @@
         </tbody>
       </table>
     </div>
+    {{template "pagination" .}}
     {{else}}
     <p class="panel-empty">{{.Layout.T "admin.no_vaults_yet"}}</p>
     {{end}}

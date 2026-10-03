@@ -1,0 +1,39 @@
+{{define "pagination-toolbar"}}
+<div class="table-toolbar">
+  <span class="ledger-count">{{.Layout.T "pagination.total" .Layout.Pagination.Total}}</span>
+  <form method="get" class="table-toolbar__size" data-page-size-form>
+    {{range $key, $value := .Layout.Query}}
+    {{if ne $key "page"}}{{if ne $key "size"}}<input type="hidden" name="{{$key}}" value="{{$value}}">{{end}}{{end}}
+    {{end}}
+    <label class="table-toolbar__size-label">
+      <span>{{.Layout.T "pagination.per_page"}}</span>
+      <select name="size" data-page-size-select>
+        {{range .Layout.PageSizeOptions}}
+        <option value="{{.}}" {{if eq . $.Layout.SelectedPageSize}}selected{{end}}>{{.}}</option>
+        {{end}}
+      </select>
+    </label>
+    <span class="table-toolbar__range">{{.Layout.T "pagination.range_short" .Layout.Pagination.From .Layout.Pagination.To}}</span>
+  </form>
+</div>
+{{end}}
+
+{{define "pagination"}}
+{{if gt .Layout.Pagination.TotalPages 1}}
+<nav class="pagination" aria-label="{{.Layout.T "pagination.label"}}">
+  <span class="pagination__pages">
+    {{if .Layout.Pagination.HasPrev}}
+    <a class="text-button" href="{{PageURL .Layout.PaginationBasePath .Layout.Query (sub .Layout.Pagination.Page 1)}}" rel="prev">{{.Layout.T "pagination.prev"}}</a>
+    {{else}}
+    <span class="text-button is-disabled">{{.Layout.T "pagination.prev"}}</span>
+    {{end}}
+    <span class="pagination__current">{{.Layout.T "pagination.page_of" .Layout.Pagination.Page .Layout.Pagination.TotalPages}}</span>
+    {{if .Layout.Pagination.HasNext}}
+    <a class="text-button" href="{{PageURL .Layout.PaginationBasePath .Layout.Query (add .Layout.Pagination.Page 1)}}" rel="next">{{.Layout.T "pagination.next"}}</a>
+    {{else}}
+    <span class="text-button is-disabled">{{.Layout.T "pagination.next"}}</span>
+    {{end}}
+  </span>
+</nav>
+{{end}}
+{{end}}

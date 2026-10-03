@@ -16,7 +16,7 @@
         <span class="eyebrow">Device ledger</span>
         <h2>{{.Layout.T "admin.cross_user_devices"}}</h2>
       </div>
-      <span class="ledger-count">{{len .Data.Devices}} devices</span>
+      {{template "pagination-toolbar" .}}
     </header>
     {{if .Data.Devices}}
     <div class="table-wrap">
@@ -85,6 +85,7 @@
         </tbody>
       </table>
     </div>
+    {{template "pagination" .}}
     {{else}}
     <p class="panel-empty">{{.Layout.T "admin.no_devices_yet"}}</p>
     {{end}}

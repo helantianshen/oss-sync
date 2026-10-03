@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,17 +70,7 @@ func TestLayoutTemplate_whenRendered_identifiesRepository(t *testing.T) {
 }
 
 func TestTemplates_whenRenderedInSupportedLanguages_executeWithoutRawLocaleKeys(t *testing.T) {
-	funcs := template.FuncMap{
-		"formatBytes": formatBytes,
-		"timeFmt": func(value time.Time) string {
-			if value.IsZero() {
-				return "-"
-			}
-			return value.Local().Format("2006-01-02 15:04")
-		},
-		"sub":      func(a, b int) int { return a - b },
-		"urlquery": url.QueryEscape,
-	}
+	funcs := templateFuncs()
 	tpl, err := template.New("x").Funcs(funcs).Option("missingkey=default").ParseFS(
 		webFS,
 		"templates/*.html",

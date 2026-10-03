@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/helantianshen/oss-sync/internal/settingspolicy"
 )
@@ -71,10 +70,7 @@ func TestParseAdminSystemInput_whenDefaultRecycleExceedsCeiling_returnsError(t *
 func TestAdminSystemTemplate_whenRendered_exposesAdministratorCeilingControls(t *testing.T) {
 	t.Parallel()
 
-	tpl, err := template.New("web").Funcs(template.FuncMap{
-		"formatBytes": formatBytes,
-		"timeFmt":     func(value time.Time) string { return value.Format("2006-01-02 15:04") },
-	}).ParseFS(webFS, "templates/admin_system.html")
+	tpl, err := template.New("web").Funcs(templateFuncs()).ParseFS(webFS, "templates/admin_system.html")
 	if err != nil {
 		t.Fatalf("parse admin system template: %v", err)
 	}

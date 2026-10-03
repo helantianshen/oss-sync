@@ -134,18 +134,18 @@ func TestConsoleThemeControlsUseSharedButton(t *testing.T) {
 	const wantClass = `class="button theme-switcher__btn"`
 
 	login := doForm(t, router, http.MethodGet, "/login", nil, nil)
-	if got := strings.Count(login.Body.String(), wantClass); got != 3 {
-		t.Errorf("login theme buttons with shared class = %d, want 3", got)
+	if got := strings.Count(login.Body.String(), wantClass); got != 4 {
+		t.Errorf("login theme buttons with shared class = %d, want 4", got)
 	}
 	register := doForm(t, router, http.MethodGet, "/register", nil, nil)
-	if got := strings.Count(register.Body.String(), wantClass); got != 3 {
-		t.Errorf("register theme buttons with shared class = %d, want 3", got)
+	if got := strings.Count(register.Body.String(), wantClass); got != 4 {
+		t.Errorf("register theme buttons with shared class = %d, want 4", got)
 	}
 
 	session, csrf := webLogin(t, router, "console-user", "password123")
 	dashboard := doForm(t, router, http.MethodGet, "/dashboard", nil, session, csrf)
-	if got := strings.Count(dashboard.Body.String(), wantClass); got != 3 {
-		t.Errorf("sidebar theme buttons with shared class = %d, want 3", got)
+	if got := strings.Count(dashboard.Body.String(), wantClass); got != 4 {
+		t.Errorf("sidebar theme buttons with shared class = %d, want 4", got)
 	}
 
 	for name, body := range map[string]string{

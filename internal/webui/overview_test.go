@@ -11,12 +11,7 @@ import (
 func TestOverviewTemplate_whenRendered_showsHomeMetricsAndDestinations(t *testing.T) {
 	t.Parallel()
 
-	tpl, err := template.New("web").Funcs(template.FuncMap{
-		"formatBytes": formatBytes,
-		"timeFmt": func(value time.Time) string {
-			return value.Format("2006-01-02 15:04")
-		},
-	}).ParseFS(webFS, "templates/overview.html")
+	tpl, err := template.New("web").Funcs(templateFuncs()).ParseFS(webFS, "templates/overview.html")
 	if err != nil {
 		t.Fatalf("parse overview template: %v", err)
 	}

@@ -53,7 +53,7 @@
       </div>
       <div class="action-cell">
         {{if .Data.FilePath}}<a class="quiet-link" href="/dashboard/vaults/{{.Data.VaultID}}/history">{{.Layout.T "history.view_all"}}</a>{{end}}
-        <span class="ledger-count">{{.Layout.T "history.record_count" (len .Data.History)}}</span>
+        {{template "pagination-toolbar" .}}
       </div>
     </header>
     {{if .Data.History}}
@@ -89,6 +89,7 @@
         </tbody>
       </table>
     </div>
+    {{template "pagination" .}}
     {{else}}
     <p class="panel-empty">{{.Layout.T "history.no_history"}}</p>
     {{end}}

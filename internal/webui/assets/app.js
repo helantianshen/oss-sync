@@ -11,6 +11,9 @@
     initCollaborationSelection();
     initThemeSettingGroups();
     initPublicBlogThemeCapability();
+    initPluginUploadProgress();
+    initPageSizeForms();
+    initPluginGuideCopy();
     initPapertrailPreview();
     initServerUpdate();
     initModals();
@@ -177,6 +180,90 @@
       btn.addEventListener("click", function () {
         var flash = btn.closest(".flash");
         if (flash) flash.remove();
+      });
+    });
+  }
+
+  function initPluginUploadProgress() {
+    document.querySelectorAll("form[data-upload-progress]").forEach(function (form) {
+      var bar = form.querySelector("[data-upload-bar]");
+      var status = form.querySelector("[data-upload-status]");
+      var container = form.querySelector(".upload-progress");
+      var submit = form.querySelector('button[type="submit"]');
+      var input = form.querySelector('input[type="file"]');
+      if (!bar || !status || !submit || !input || !container) return;
+
+      function setProgress(ratio, message) {
+        bar.style.width = Math.max(0, Math.min(100, Math.round(ratio * 100))) + "%";
+        bar.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+        status.textContent = message;
+      }
+
+      form.addEventListener("submit", function (event) {
+        if (!window.XMLHttpRequest || !input.files || input.files.length === 0) return;
+        event.preventDefault();
+        container.classList.add("is-active");
+        var xhr = new XMLHttpRequest();
+        var formData = new FormData(form);
+        submit.disabled = true;
+        setProgress(0, "正在上传 " + input.files[0].name);
+        xhr.open(form.getAttribute("method") || "POST", form.getAttribute("action"));
+        xhr.upload.addEventListener("progress", function (e) {
+          if (!e.lengthComputable) return;
+          setProgress(e.loaded / e.total, "上传中 " + Math.round((e.loaded / e.total) * 100) + "%");
+        });
+        xhr.addEventListener("load", function () {
+          setProgress(1, "安装中");
+          // XHR 跟随 303 后的 responseURL 即最终落地页；缺失时回到表单目标
+          var next = xhr.responseURL || form.getAttribute("action") || window.location.href;
+          window.location.assign(next);
+        });
+        xhr.addEventListener("error", function () {
+          submit.disabled = false;
+          container.classList.remove("is-active");
+          setProgress(0, "上传失败，请重试");
+        });
+        xhr.send(formData);
+      });
+    });
+  }
+
+  function initPluginGuideCopy() {
+    var button = document.querySelector("[data-guide-copy]");
+    var source = document.querySelector("script[data-guide-source]");
+    if (!button || !source) return;
+    button.addEventListener("click", function () {
+      var text = source.textContent || "";
+      function fallbackCopy() {
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+        document.body.removeChild(area);
+        window.alert(ok ? "插件指南已复制到剪贴板。" : "复制失败，请手动选择文本复制。");
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          window.alert("插件指南已复制到剪贴板。");
+        }, fallbackCopy);
+        return;
+      }
+      fallbackCopy();
+    });
+  }
+
+  function initPageSizeForms() {
+    document.querySelectorAll("[data-page-size-form]").forEach(function (form) {
+      var select = form.querySelector("[data-page-size-select]");
+      if (!select) return;
+      // CSP 禁止 inline handler，变更提交统一在这里绑定
+      select.addEventListener("change", function () {
+        form.submit();
       });
     });
   }

@@ -35,7 +35,13 @@ function makeFakeAdapter(initial = {}) {
     async write(path, data) {
       ops.push(["write", path]);
       if (adapter.writeFailFor.has(path)) throw new Error(`write failed: ${path}`);
-      files.set(path, typeof data === "string" ? data : decode(data));
+      // Obsidian 的 adapter.write 只接受字符串，传入其他类型必须抛错，与真实实现一致
+      if (typeof data !== "string") {
+        throw new TypeError(
+          'The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of ArrayBuffer'
+        );
+      }
+      files.set(path, data);
     },
     async rename(oldPath, newPath) {
       ops.push(["rename", oldPath, newPath]);
@@ -325,6 +331,31 @@ test("downloadUpdateAssets rejects non-GitHub asset URLs", async () => {
       downloadUpdateAssets(source, response.json),
       /invalid download URL/,
     );
+  } finally {
+    await cleanup();
+  }
+});
+
+// 临时文件写入必须适配 Obsidian 的 adapter.write 字符串契约
+// 直接传入 ArrayBuffer 会在 Electron 侧抛 "data argument must be of type string"
+test("applyPluginUpdate writes decoded strings instead of ArrayBuffer", async () => {
+  const { applyPluginUpdate, cleanup } = await loadUpdateModule("src/plugin-update-apply.ts");
+  try {
+    const adapter = makeFakeAdapter(ORIGINAL_FILES);
+    const reload = makeReloadController(() => "0.2.0");
+    const written = [];
+    const originalWrite = adapter.write.bind(adapter);
+    adapter.write = async (path, data) => {
+      written.push({ path, type: typeof data });
+      return originalWrite(path, data);
+    };
+
+    await applyPluginUpdate({ adapter, reload, dir: "dir", pluginID: "oss-sync", files: updateFiles() });
+
+    assert.ok(written.length > 0, "applyPluginUpdate must call adapter.write");
+    for (const entry of written) {
+      assert.equal(entry.type, "string", `${entry.path} must be written as a string`);
+    }
   } finally {
     await cleanup();
   }

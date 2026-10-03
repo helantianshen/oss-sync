@@ -10,6 +10,7 @@
 
 {{if .Data.Error}}<div class="notice notice--error" role="alert">{{.Data.Error}}</div>{{end}}
 {{if .Data.Saved}}<div class="notice notice--success" role="status">{{.Layout.T "admin.operation_successful"}}</div>{{end}}
+{{if .Data.Updated}}<div class="notice notice--success" role="status">{{.Layout.T "admin.plugin_updated" .Data.UpdatedVersion}}</div>{{end}}
 
 <div class="control-grid">
   <article class="gate-panel">
@@ -18,13 +19,17 @@
       <h2>{{.Layout.T "admin.upload_plugin"}}</h2>
       <p>{{.Layout.T "admin.upload_plugin_desc"}}</p>
     </div>
-    <form method="post" action="/dashboard/admin/plugins/upload" enctype="multipart/form-data" class="gate-form stack-form">
+    <form method="post" action="/dashboard/admin/plugins/upload" enctype="multipart/form-data" class="gate-form stack-form" data-upload-progress>
       <input type="hidden" name="_csrf" value="{{.Layout.CSRF}}">
       <label>
         <span>{{.Layout.T "admin.plugin_package"}}</span>
         <input type="file" name="file" accept=".zip,application/zip" required>
         <small>{{.Layout.T "admin.plugin_package_hint"}}</small>
       </label>
+      <div class="upload-progress" data-upload-progress>
+        <div class="upload-progress__track"><div class="upload-progress__bar" data-upload-bar role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>
+        <small class="upload-progress__status" data-upload-status role="status" aria-live="polite"></small>
+      </div>
       <button class="button button--primary" type="submit">{{.Layout.T "admin.install_plugin"}}</button>
     </form>
   </article>
@@ -58,23 +63,54 @@
               {{if .Description}}<small class="plugin-description">{{.Description}}</small>{{end}}
               {{if .LastError}}<small class="plugin-error" role="alert">{{.LastError}}</small>{{end}}
             </td>
-            <td>{{.Version}}</td>
             <td>
+              {{.Version}}
+              {{$update := index $.Data.Updates .ID}}
+              {{if and $update $update.HasUpdate $update.Latest}}
+              <small class="plugin-update-flag">{{$.Layout.T "admin.plugin_update_new_version" $update.Latest}}</small>
+              {{end}}
+            </td>
+            <td>
+              {{if eq .Runtime "executable"}}
+              <span class="role role--admin" title="{{$.Layout.T "admin.plugin_runtime_executable_note"}}">{{$.Layout.T "admin.plugin_runtime_executable"}}</span>
+              {{else}}
+              <span class="role role--user" title="{{$.Layout.T "admin.plugin_runtime_wasm_note"}}">{{$.Layout.T "admin.plugin_runtime_wasm"}}</span>
+              {{end}}
+              <br>
               {{if .Builtin}}
               <span class="panel-note">{{$.Layout.T "admin.plugin_builtin"}}</span>
               {{else if .Enabled}}
-              <span class="role role--admin">{{$.Layout.T "admin.plugin_enabled"}}</span>
+              <span class="panel-note">{{$.Layout.T "admin.plugin_enabled"}}</span>
               {{else}}
-              <span class="role role--user">{{$.Layout.T "admin.plugin_disabled"}}</span>
+              <span class="panel-note">{{$.Layout.T "admin.plugin_disabled"}}</span>
               {{end}}
             </td>
             <td>{{len .Routes}}</td>
-            <td><span class="panel-note">{{.Runtime}}</span><br>{{formatBytes .PayloadSize}}</td>
+            <td class="plugin-size">
+              <span class="plugin-size__row" title="{{$.Layout.T "admin.plugin_size_package_note"}}">
+                <em>{{$.Layout.T "admin.plugin_size_package"}}</em>{{formatBytes .PayloadSize}}
+              </span>
+              <span class="plugin-size__row" title="{{$.Layout.T "admin.plugin_size_used_note"}}">
+                <em>{{$.Layout.T "admin.plugin_size_used"}}</em>{{formatBytes .InstalledBytes}}
+              </span>
+            </td>
             <td class="action-cell">
               {{if .Builtin}}
               <span class="panel-note">{{$.Layout.T "admin.plugin_builtin"}}</span>
               {{else}}
               <a class="quiet-link" href="/dashboard/admin/plugins?edit={{.ID}}">{{$.Layout.T "common.edit"}}</a>
+              {{$update := index $.Data.Updates .ID}}
+              {{if and $update $update.UpdatableHere $update.Latest}}
+              <form method="post" action="/dashboard/admin/plugins/{{.ID}}/update">
+                <input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}">
+                <button class="text-button text-button--primary" type="submit">{{$.Layout.T "admin.plugin_update_available" $update.Latest}}</button>
+              </form>
+              {{else if and .Enabled .UpdateURL}}
+              <form method="post" action="/dashboard/admin/plugins/{{.ID}}/update-check">
+                <input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}">
+                <button class="text-button" type="submit">{{$.Layout.T "admin.plugin_check_update"}}</button>
+              </form>
+              {{end}}
               {{if .Enabled}}
               <form method="post" action="/dashboard/admin/plugins/{{.ID}}/disable">
                 <input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}">
@@ -136,9 +172,14 @@
   <div class="modal__panel">
     <div class="collaboration-modal__header">
       <div><span class="eyebrow">Plugin handbook</span><h2 id="plugin-guide-title">{{.Layout.T "admin.plugin_guide"}}</h2></div>
-      <button class="text-button" type="button" data-modal-close>{{.Layout.T "common.close"}}</button>
+      <div class="guide-toolbar">
+        <a class="text-button" href="/dashboard/admin/plugins/guide.md" download>{{.Layout.T "admin.plugin_guide_export"}}</a>
+        <button class="text-button" type="button" data-guide-copy>{{.Layout.T "admin.plugin_guide_copy"}}</button>
+        <button class="text-button" type="button" data-modal-close>{{.Layout.T "common.close"}}</button>
+      </div>
     </div>
-    <div class="markdown-guide">{{.Data.GuideHTML}}</div>
+    <div class="markdown-guide" data-guide-content>{{.Data.GuideHTML}}</div>
+    <script type="text/plain" data-guide-source>{{.Data.GuideSource}}</script>
   </div>
 </div>
 {{end}}

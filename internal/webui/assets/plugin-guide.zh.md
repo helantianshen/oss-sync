@@ -110,6 +110,9 @@ my-plugin.zip
 | `routes` | 兼容声明 | 顶层 manifest 路由,用于命名空间路由 |
 | `registration` | executable 建议使用 | 运行时 Hook、路由、管理页、资源、任务等完整注册 |
 | `settings` | 可选 | 兼容的插件设置声明 |
+| `settings_visibility` | 可选 | 侧边栏设置入口的可见范围：`always` 启用即显示；缺省或 `when_used` 仅当博客/控制台主题资源被某个仓库选用时显示。纯功能插件（无主题资源）始终显示 |
+| `update_url` | 可选 | 作者提供的版本查询接口。宿主「检查更新」会 GET 该地址，期望返回 `{"version":"x.y.z","url":"https://.../plugin.zip","notes":"..."}`。省略时宿主不提供检查入口，插件需自行实现更新 |
+| `auto_check_update` | 可选 | 预留的自动检查开关，布尔值，缺省 `false`。当前版本仍需管理员在插件管理页手动点击「检查更新」 |
 | `hooks` | 可选 | 简化 Hook 声明 |
 | `blog_themes` | 可选 | 博客主题资源 |
 | `console_themes` | 可选 | 控制台主题资源 |
@@ -537,6 +540,43 @@ Lifecycle: ossplugin.Lifecycle{
 8. 删除前必须先停用。
 
 进程崩溃或违反协议时,等待中的调用会失败。重新启用插件会启动新进程。
+
+### 11.1 自助更新接口
+
+宿主不为插件内置更新通道,作者自行决定分发方式。在 manifest 中声明查询接口:
+
+```json
+{
+  "id": "your-plugin",
+  "version": "1.0.0",
+  "update_url": "https://example.com/oss-plugin/latest.json",
+  "auto_check_update": false
+}
+```
+
+管理员在插件管理页点击「检查更新」时,宿主会 GET `update_url`,期望返回:
+
+```json
+{
+  "version": "1.1.0",
+  "url": "https://example.com/oss-plugin/your-plugin-1.1.0.zip",
+  "notes": "修复了附件同步问题"
+}
+```
+
+判定规则:
+
+| 情况 | 宿主行为 |
+| --- | --- |
+| 未声明 `update_url` | 不提供检查入口,插件需自行实现更新 |
+| 接口不可达或返回非 200 | 提示检查失败,不影响其他插件 |
+| `version` 不大于当前版本 | 提示已是最新版本 |
+| 有新版本且提供 `url` | 按钮变为「更新到 x.y.z」,版本号旁标注「有新版本:x.y.z」,点击后由宿主下载并升级 |
+| 有新版本但没有 `url` | 提示按作者说明手动更新 |
+
+版本比较使用严格 SemVer(`major.minor.patch`),非法版本号视为无更新。`auto_check_update` 当前仅作为声明保留,宿主暂不自动检查,避免启动时依赖外部接口。
+
+下载与安装复用同一套上传校验:ZIP 大小上限、路径穿越、符号链接、manifest 与入口校验、ready handshake,以及升级失败时的旧包保留与回退。因此 `url` 指向的必须是完整的插件 ZIP,而不是差分补丁。
 
 ## 12. 测试清单
 

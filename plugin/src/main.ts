@@ -70,6 +70,7 @@ import {
   type TranslationParams,
 } from "./i18n";
 import { localizeError } from "./localized-error";
+import { NoticeGuard } from "./notice-guard";
 import { ConflictOpeningGuard } from "./conflict-opening-guard";
 
 interface PluginData extends OSSSettings {
@@ -102,6 +103,8 @@ export default class OSSPlugin extends Plugin {
   private loaded = false;
   private readonly conflictWarningLast = new Map<string, number>();
   private readonly conflictOpenings = new ConflictOpeningGuard();
+  /** 登录态与网络类失败的提示冷却，同步成功后清零 */
+  private readonly errorNotices = new NoticeGuard();
 
   constructor(app: App, manifest: PluginManifest) {
     super(app, manifest);
@@ -277,7 +280,10 @@ export default class OSSPlugin extends Plugin {
           void this.handleDeviceIdentityRequired();
           return;
         }
-        new Notice(this.t("notice.loadVaultsFailed", { error: this.localizedError(error) }));
+        // 启动期失败与后续轮询失败同源，冷期内只提示一次
+        if (this.errorNotices.shouldShow("plugin.vaults")) {
+          new Notice(this.t("notice.loadVaultsFailed", { error: this.localizedError(error) }));
+        }
       });
     });
   }
@@ -884,11 +890,13 @@ export default class OSSPlugin extends Plugin {
         }
       }
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        new Notice(this.t("notice.pluginCapabilitiesFailed", { error: error.message }));
-        return;
+      // 能力列表失败多为登录态或网络问题，冷期内只提示一次，手动同步会在成功后清除抑制
+      if (this.errorNotices.shouldShow("plugin.capabilities")) {
+        new Notice(this.t("notice.pluginCapabilitiesFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }));
       }
-      throw error;
+      return;
     }
   }
 

@@ -410,10 +410,7 @@ func TestAdminUpdateCheck_usesRequestedSource(t *testing.T) {
 }
 
 func TestAdminSystemTemplate_UpdatePanel(t *testing.T) {
-	tpl, err := template.New("web").Funcs(template.FuncMap{
-		"formatBytes": formatBytes,
-		"timeFmt":     func(v time.Time) string { return v.Format("2006-01-02 15:04") },
-	}).ParseFS(webFS, "templates/admin_system.html")
+	tpl, err := template.New("web").Funcs(templateFuncs()).ParseFS(webFS, "templates/admin_system.html")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
