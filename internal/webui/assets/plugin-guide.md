@@ -396,6 +396,8 @@ Common host-called names include `blog.content`, `theme.render`, `blog.data`, an
 - `method`, `request_url`, `query`;
 - `headers`, `cookies`, `client_ip`.
 
+The host currently forwards request headers and cookies without filtering sensitive fields, including any session or CSRF credentials carried by the visitor. Only trusted plugins should register `blog.data`; WASM import restrictions do not isolate data supplied by the host. Never log the full payload.
+
 Return JSON. The blog exposes it under `.PluginData[plugin-id]`. A theme can read it with `pluginField`:
 
 ```gotemplate
@@ -662,7 +664,7 @@ Never accept an answer that invents an SDK method, assumes a route namespace, wr
 
 ## Blog template contract
 
-Blogs render dynamically per HTTP request; they do not export static sites. Built-in `default` handles shared reading, while `papertrail` supports a blog homepage. Select a homepage-capable theme in Vault settings, enable the public blog, and create individual article shares. Enabling a blog does not publish unshared notes.
+Blogs render dynamically per HTTP request; they do not export static sites. Built-in `default` handles shared reading, while `papertrail`, `sakura`, `glass`, and `starry-night` support blog homepages. Select a homepage-capable theme in Vault settings, enable the public blog, and create individual article shares. Enabling a blog does not publish unshared notes.
 
 ### Installation
 

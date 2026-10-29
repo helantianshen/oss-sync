@@ -1,8 +1,10 @@
-# Obsidian 插件更新加速源开发 Spec
+# 历史方案：Obsidian 插件更新加速源（已被替代）
 
-- 状态：历史方案，客户端自更新及下载源设置已由 2026-10-15 的市场更新提醒方案取代。当前仅读取官方仓库根目录 `manifest.json`，每次启动和运行期间每隔 30 分钟检查一次，提示通过 Obsidian 社区插件市场更新。以下内容保留为历史记录
-- 日期：2026-09-22
-- 范围：Obsidian 插件自身的版本检查和 Release 文件下载
+- 状态：已归档。客户端自更新、下载源设置和插件文件替换流程已被市场更新提醒方案取代；当前行为以[开发指南](../development.md#客户端与服务端更新)及实际源码为准。
+- 原始日期：2026-09-22
+- 原始范围：Obsidian 插件自身的版本检查和 Release 文件下载
+
+> 下文保留当时的设计与实施记录，不是当前功能说明或开发要求。其中“当前”“现有”、旧文件名、测试数量及验证结果均属于原始记录，不能作为现版本能力或验证证据。现版本只读取官方仓库根清单并提示用户通过 Obsidian 社区插件市场更新，不再执行本文的客户端下载安装流程。
 
 ## 1. 目标与现状
 
@@ -10,7 +12,7 @@
 
 当前插件直接请求 GitHub，仓库由 `updateRepo` 指定，默认 `helantianshen/oss-sync`。检查版本优先读取 Release 中的 `manifest.json`，失败时退回 Release 标签；安装时下载 `main.js`、`manifest.json`、`styles.css` 并验证大小和 SHA-256，然后替换文件并重载插件。
 
-服务端参考实现：[地址转换](../internal/update/download_source.go)、[API 请求选源](../internal/update/github.go)、[管理界面](../internal/webui/templates/admin_system.html)。当前 dev/prod YAML 均配置 `update.download_source: "proxy"`；这不等于后端所有缺省配置都自动选择代理。
+服务端参考实现：[地址转换](../../internal/update/download_source.go)、[API 请求选源](../../internal/update/github.go)、[管理界面](../../internal/webui/templates/admin_system.html)。当前 dev/prod YAML 均配置 `update.download_source: "proxy"`；这不等于后端所有缺省配置都自动选择代理。
 
 ## 2. 范围边界
 
@@ -115,11 +117,11 @@ API 元数据和资产都经过代理时，SHA-256 校验可以发现内容与�
 
 | 文件 | 计划职责 |
 | --- | --- |
-| [settings.ts](../plugin/src/settings.ts) | 新增配置类型、默认值，修正直接涉及的过时权限注释 |
-| [plugin-update.ts](../plugin/src/plugin-update.ts) | 选源类型、前缀校验、地址转换、请求配置快照支持 |
-| [main.ts](../plugin/src/main.ts) | 配置加载归一化、检查/安装快照及重复安装保护、自动检查结果有效性 |
-| [settings-tab.ts](../plugin/src/settings-tab.ts) | 下拉框、条件输入、校验反馈、旧结果失效与忙碌状态 |
-| [i18n.ts](../plugin/src/i18n.ts) | 中英文设置与错误文案 |
+| [settings.ts](../../plugin/src/settings.ts) | 新增配置类型、默认值，修正直接涉及的过时权限注释 |
+| [plugin-update.ts](../../plugin/src/plugin-update.ts) | 选源类型、前缀校验、地址转换、请求配置快照支持 |
+| [main.ts](../../plugin/src/main.ts) | 配置加载归一化、检查/安装快照及重复安装保护、自动检查结果有效性 |
+| [settings-tab.ts](../../plugin/src/settings-tab.ts) | 下拉框、条件输入、校验反馈、旧结果失效与忙碌状态 |
+| [i18n.ts](../../plugin/src/i18n.ts) | 中英文设置与错误文案 |
 
 无需新增依赖，无需修改后端与 `plugin-update-apply.ts` 的文件替换机制，不提交 `plugin/main.js` 等构建产物。
 

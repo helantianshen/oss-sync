@@ -5,9 +5,9 @@ package version
 
 import "strings"
 
-// Version 是服务端语义化版本号，由 ldflags 在发布构建时覆盖
-// 未覆盖时为本地开发的初始版本，便于插件识别与自更新检查
-var Version = "0.1.2"
+// Version 是服务端构建版本，由 ldflags 在发布构建时覆盖
+// 未注入版本的源码构建标记为 dev，不能执行发布版自更新
+var Version = "dev"
 
 // Commit 是构建时的 Git commit（短哈希），由 ldflags 注入
 var Commit = ""

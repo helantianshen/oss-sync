@@ -1,5 +1,7 @@
 # OSS Sync Server Plugins
 
+This is the concise protocol reference. See the [documentation index](README.md) for deployment and development, or the complete [English](../internal/webui/assets/plugin-guide.md) / [Chinese](../internal/webui/assets/plugin-guide.zh.md) guide embedded in the console.
+
 ## 1. Runtime choice
 
 OSS Sync has two runtimes:
@@ -246,6 +248,8 @@ method, request_url, query,
 headers, cookies, client_ip
 ```
 
+The host currently passes request headers and cookies without filtering sensitive fields. A `blog.data` plugin can therefore receive the visitor's session and CSRF credentials. This applies to WASM hooks as well as executables: lack of filesystem or network imports is not a guarantee of credential isolation. Enable only trusted plugins and never log these payloads.
+
 The returned JSON is available in the selected blog template under `.PluginData[plugin-id]`. This is the preferred integration point for comments, VIP state, article statistics, recommendations, and widgets.
 
 `safeHTML` is for trusted plugin-generated HTML only. Sanitize user-controlled comments, names, URLs, and article fields before rendering them as HTML.
@@ -347,7 +351,7 @@ Reject answers that invent APIs, confuse route namespaces, treat executable plug
 
 ## Blog template contract
 
-Blogs render dynamically per HTTP request; they do not export static sites. Built-in `default` handles shared reading, while `papertrail` supports a blog homepage. Select a homepage-capable theme in Vault settings, enable the public blog, and create individual article shares. Enabling a blog does not publish unshared notes.
+Blogs render dynamically per HTTP request; they do not export static sites. Built-in `default` handles shared reading, while `papertrail`, `sakura`, `glass`, and `starry-night` support blog homepages. Select a homepage-capable theme in Vault settings, enable the public blog, and create individual article shares. Enabling a blog does not publish unshared notes.
 
 ### Installation
 

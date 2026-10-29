@@ -432,6 +432,8 @@ client.On("blog.content", func(_ context.Context, request ossplugin.Request) (os
 - `method`、`request_url`、`query`;
 - `headers`、`cookies`、`client_ip`。
 
+宿主目前不裁剪请求头和 Cookie 中的敏感字段，访问者随请求携带的会话或 CSRF 凭据也会传入。只有受信任的插件才应注册 `blog.data`；WASM 的导入限制不能隔离宿主主动提供的数据。不要记录完整 payload。
+
 返回 JSON 后,博客主题通过 `.PluginData[plugin-id]`读取:
 
 ```gotemplate
@@ -695,7 +697,7 @@ stdout 只能用于插件协议,日志写 stderr。
 
 ## 博客模板契约
 
-博客按 HTTP 请求动态渲染，不生成静态站点文件。内置 `default` 用于分享阅读，`papertrail` 支持公开博客首页。仓库管理者在仓库设置中选择支持首页的模板并开启公开博客，再为需要发布的文章创建单篇分享；开启博客不会公开未分享的文章。
+博客按 HTTP 请求动态渲染，不生成静态站点文件。内置 `default` 用于分享阅读，`papertrail`、`sakura`、`glass`、`starry-night` 支持公开博客首页。仓库管理者在仓库设置中选择支持首页的模板并开启公开博客，再为需要发布的文章创建单篇分享；开启博客不会公开未分享的文章。
 
 ### 安装和文件结构
 
