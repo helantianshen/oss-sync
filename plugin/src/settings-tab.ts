@@ -4,6 +4,7 @@ import type OSSPlugin from "./main";
 import type { OSSSettings } from "./settings";
 import { validateLoginCredentials, validateServerURL } from "./login-state";
 import { OSS_LOGO_DATA_URL } from "./brand";
+import { renderShareGuideEntry } from "./share-guide-modal";
 
 /** 插件设置页：按语言、服务端、仓库、设备、同步与更新分组渲染表单，并维护仓库下拉的定时刷新 */
 export class OSSSettingTab extends PluginSettingTab {
@@ -423,6 +424,8 @@ export class OSSSettingTab extends PluginSettingTab {
           if (!synced) new Notice(this.plugin.t("notice.syncIncomplete"));
         })
       );
+
+    renderShareGuideEntry(containerEl, this.app, this.plugin);
 
     this.renderUpdateSection(containerEl);
     if (this.plugin.isAdmin()) {

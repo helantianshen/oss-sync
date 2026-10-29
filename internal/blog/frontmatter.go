@@ -4,9 +4,10 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/helantianshen/oss-sync/internal/markdown"
 )
 
 // 阅读时长按每分钟 400 字估算
@@ -103,12 +104,12 @@ func parseFrontmatterBlock(metadata map[string]yaml.Node) frontmatter {
 // buildArticleMeta 汇总文章标题与元数据；标题优先 frontmatter，摘要优先 description，
 // 日期优先 published，其余缺省时从正文与文件修改时间推导。resolve 把正文引用的附件路径转换为公开 URL，可为 nil
 func buildArticleMeta(fm frontmatter, body, fallbackTitle string, modified time.Time, resolve func(string) string) (string, ArticleMeta) {
-	title := fm.title
+	title := strings.TrimSpace(fm.title)
 	if title == "" {
 		title = basenameNoExt(fallbackTitle)
 	}
 	meta := ArticleMeta{
-		Summary:  fm.description,
+		Summary:  strings.TrimSpace(fm.description),
 		Date:     parsePostDate(fm.published, modified),
 		Category: fm.category,
 		Tags:     fm.tags,
@@ -129,20 +130,9 @@ func buildArticleMeta(fm frontmatter, body, fallbackTitle string, modified time.
 	return title, meta
 }
 
-// firstBodyLine 取正文首个非空且非标题的行作为摘要，超过 120 字截断
+// firstBodyLine 从正文提取最多 120 字的纯文本摘要。
 func firstBodyLine(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		// 分隔线与标题不提供摘要信息
-		if trimmed == "" || trimmed == "---" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if utf8.RuneCountInString(trimmed) > 120 {
-			trimmed = string([]rune(trimmed)[:120]) + "…"
-		}
-		return trimmed
-	}
-	return ""
+	return markdown.Summary(body, 120)
 }
 
 // parsePostDate 优先使用 frontmatter 的发布日期，支持常见日期格式，缺省回退文件修改时间

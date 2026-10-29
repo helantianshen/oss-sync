@@ -758,6 +758,7 @@ blog/clean/theme.json
 | `.ContentHTML` | 已渲染的正文或目录 HTML；首页为空，必须读取 HomePosts |
 | `.AllowCopy` / `.BlogHomeURL` | 是否显示复制按钮；公开博客首页 URL，未开启时为空 |
 | `.BlogName` / `.Description` | 博客名称、介绍 |
+| `.MetaDescription` | 当前页面描述：文章页使用文章摘要，摘要为空时用文章标题；首页及目录页使用博客介绍，缺省回退页面标题。用于 `<meta name="description">` |
 | `.LogoURL` / `.LogoSize` / `.LogoShape` | Logo URL、像素尺寸、square/circle |
 | `.BannerURL` / `.MobileBannerURL` | 桌面和移动横幅 URL |
 | `.Buttons` | 链接列表，元素含 `.Label`、`.URL`、`.IconURL`、`.Position` |
@@ -765,7 +766,7 @@ blog/clean/theme.json
 | `.ThemeConfigJS` | 安全 JSON，可用于 `<script>window.config = {{.ThemeConfigJS}};</script>`；没有 `.ThemeConfig` 字段 |
 | `.PluginData` | 插件展示数据；用 `pluginField .PluginData "plugin-id" "field"`、`hasPlugin` 或 `with index` 读取；`safeHTML` 仅用于可信且已清洗的 HTML |
 
-YAML frontmatter 必须位于文首并由独立的 `---` 行闭合。支持 `title`、`description`（备用 `summary`）、`published`（备用 `date`）、`category`、`tags`、`image`（备用 `cover`）。摘要支持 `|` 和 `>` 多行写法，标签支持 YAML 列表或逗号分隔文本；同组字段优先使用主字段。有效块从正文隐藏，损坏或未闭合块保留。标题缺省使用文件名，摘要缺省使用首个非标题正文行，日期缺省使用文件更新时间。
+YAML frontmatter 必须位于文首并由独立的 `---` 行闭合。支持 `title`、`description`（备用 `summary`）、`published`（备用 `date`）、`category`、`tags`、`image`（备用 `cover`）。摘要支持 `|` 和 `>` 多行写法，标签支持 YAML 列表或逗号分隔文本；同组字段优先使用主字段。有效块从正文隐藏，损坏或未闭合块保留。标题未写或为空时使用文件名；摘要未写或为空时，从正文提取最多 120 字的纯文本，截断时追加省略号，跳过标题、单独的章节导航链接、图片、纯代码块、表格和 HTML 块，保留普通链接的文字及句中的行内代码并去除 Markdown 标记。日期缺省使用文件更新时间。这些规则只影响渲染结果，不修改原始笔记。
 
 附件引用中，`./`、`../` 仅相对文章目录解析且不能越出仓库；其他路径先查仓库根路径，再查文章相对路径，裸文件名最后匹配同仓库附件名（重名时取 mtime 最新者）。若要避开根目录同名文件，请使用 `./`。Markdown 图片和 frontmatter 封面 URL 支持编码路径、查询参数和片段：附件查找只使用解码后的路径，片段保留在生成的 URL 中。Wiki 嵌入按字面文件名处理，百分号和井号不会被当成 URL 转义或片段。远程 `http(s)` 图片和封面直接使用原 URL，以 `/` 开头的封面也是站点 URL。文件夹分享的资源地址携带 `source` 文章路径，服务端会校验分享范围、文章存续和实际引用关系。
 

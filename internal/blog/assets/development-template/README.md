@@ -32,6 +32,7 @@
 | `.CustomHeader` / `.CustomFooter` | 仓库自定义片段（若存在） |
 | `.FooterNotice` | 服务端提示内容 |
 | `.BlogName` / `.Description` | 博客名称与介绍 |
+| `.MetaDescription` | 当前页面描述，用于 meta description；文章摘要优先，无摘要时回退文章标题，首页与目录页使用博客介绍 |
 | `.LogoURL` / `.LogoSize` / `.LogoShape` | Logo 地址、像素尺寸、`square`/`circle` |
 | `.BannerURL` / `.MobileBannerURL` | 桌面端与移动端横幅地址 |
 | `.Buttons` | 自定义链接列表，元素含 `.Label` / `.URL` / `.IconURL` |

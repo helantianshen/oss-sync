@@ -227,11 +227,13 @@ type renderParams struct {
 	BlogHomeURL string
 	BlogName    string
 	Description string
-	LogoURL     string
-	LogoSize    int
-	LogoShape   string
-	Buttons     []BlogButton
-	HomePosts   []HomePost
+	// MetaDescription 是当前页面的搜索摘要，Description 保留博客介绍语义。
+	MetaDescription string
+	LogoURL         string
+	LogoSize        int
+	LogoShape       string
+	Buttons         []BlogButton
+	HomePosts       []HomePost
 	// 自定义主题可用的横幅与文章元数据
 	BannerURL       string
 	MobileBannerURL string
@@ -312,6 +314,19 @@ func (h *Handler) loadVaultSettings(userID uint, vaultID string) (*models.VaultS
 }
 
 func (h *Handler) renderTemplate(c *gin.Context, p renderParams) {
+	c.Header("X-Robots-Tag", "index, follow")
+	if p.MetaDescription == "" {
+		p.MetaDescription = p.Description
+		if !p.IsHome && !p.IsFolder && p.ArticleTitle != "" {
+			p.MetaDescription = p.ArticlePost.Summary
+			if strings.TrimSpace(p.MetaDescription) == "" {
+				p.MetaDescription = p.ArticleTitle
+			}
+		}
+		if strings.TrimSpace(p.MetaDescription) == "" {
+			p.MetaDescription = p.Title
+		}
+	}
 	// 先收集插件展示数据，内容过滤与主题渲染都可能依赖其中的上下文
 	p.PluginData = h.collectPluginData(c, p)
 	if h.pluginHooks != nil && p.ContentHTML != "" {

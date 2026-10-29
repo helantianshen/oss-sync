@@ -1,6 +1,7 @@
 import { App, Modal, Notice } from "obsidian";
 import type OSSPlugin from "./main";
 import { renderShareRows } from "./share-section";
+import { renderShareGuideEntry } from "./share-guide-modal";
 
 /** 全量分享管理模态框；列出当前账号下所有分享并支持行内操作*/
 export class ShareManagerModal extends Modal {
@@ -20,21 +21,23 @@ export class ShareManagerModal extends Modal {
 
   private async load(): Promise<void> {
     this.contentEl.empty();
-    this.contentEl.createDiv({
+    renderShareGuideEntry(this.contentEl, this.app, this.plugin);
+    const listEl = this.contentEl.createDiv();
+    listEl.createDiv({
       cls: "oss-sidebar-empty",
       text: this.plugin.t("sidebar.sharesLoading"),
     });
     try {
       const result = await this.plugin.api.listShares();
-      this.contentEl.empty();
-      renderShareRows(this.contentEl, this.plugin, {
+      listEl.empty();
+      renderShareRows(listEl, this.plugin, {
         shares: result.shares,
         onChanged: () => this.load(),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : this.plugin.t("common.unknownError");
-      this.contentEl.empty();
-      this.contentEl.createDiv({
+      listEl.empty();
+      listEl.createDiv({
         cls: "oss-sidebar-empty",
         text: this.plugin.t("sidebar.sharesLoadFailed", { error: message }),
       });

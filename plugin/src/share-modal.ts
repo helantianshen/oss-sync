@@ -1,5 +1,6 @@
 import { App, Modal, Notice, Setting, TFile, TFolder } from "obsidian";
 import type OSSPlugin from "./main";
+import { renderShareGuideEntry } from "./share-guide-modal";
 
 /** 生成分享链接的模态框；支持文件与文件夹目标，可配置是否允许复制*/
 export class ShareModal extends Modal {
@@ -37,6 +38,8 @@ export class ShareModal extends Modal {
     new Setting(contentEl)
       .setName(this.plugin.t("share.hint"))
       .setDesc(this.plugin.t("share.hintDesc"));
+
+    renderShareGuideEntry(contentEl, this.app, this.plugin);
 
     new Setting(contentEl)
       .addButton((btn) =>

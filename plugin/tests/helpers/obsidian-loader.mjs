@@ -47,6 +47,15 @@ const OBSIDIAN_STUB = `
       this.containerEl?.setAttribute?.("data-setting-desc", text);
       return this;
     }
+    addButton(apply) {
+      const element = this.containerEl.createEl("button");
+      const button = {
+        setButtonText: (text) => { element.setText(text); return button; },
+        onClick: (handler) => { element.addEventListener("click", handler); return button; },
+      };
+      apply(button);
+      return this;
+    }
     addToggle(apply) {
       const toggle = {
         setValue: (value) => {
