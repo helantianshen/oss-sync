@@ -1,7 +1,7 @@
 {
   "id": "oss-sync",
   "name": "OSS Sync and Share",
-  "version": "0.2.15",
+  "version": "0.3.0",
   "minAppVersion": "1.4.0",
   "description": "Self-hosted sync and share: Markdown + attachments + vault config, LWW-based multi-device sync, lightweight blog publishing, and collaboration editing.",
   "author": "OSS Project",
