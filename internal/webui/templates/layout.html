@@ -11,6 +11,9 @@
   {{if and .Layout.ConsoleThemeName (ne .Layout.ConsoleThemeName "default")}}
   <link rel="stylesheet" href="/ui/themes/{{.Layout.ConsoleThemeName}}/theme.css?v=22">
   {{end}}
+  <link rel="icon" href="/favicon.ico?v=2" sizes="16x16 32x32 48x48">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+  <link rel="stylesheet" href="/ui/assets/brand.css?v=1">
 </head>
 <body class="{{if not .Layout.ShowSidebar}}body--auth{{else}}body--console{{end}}">
   {{if .Layout.ShowSidebar}}

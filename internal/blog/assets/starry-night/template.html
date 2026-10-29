@@ -10,6 +10,9 @@
   <script data-cfasync="false" src="/ui/assets/theme.js?v=2"></script>
   <link rel="stylesheet" href="{{.ThemeBaseURL}}/style.css?v=4">
   <script defer src="{{.ThemeBaseURL}}/theme.js?v=2"></script>
+  <link rel="icon" href="/favicon.ico?v=2" sizes="16x16 32x32 48x48">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+  <link rel="stylesheet" href="/ui/assets/brand.css?v=1">
 </head>
 <body id="top">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -23,7 +26,7 @@
     <div class="sn-sky__inner">
       <header class="sn-sky__head">
         {{if .BlogHomeURL}}<a class="sn-brand" href="{{.BlogHomeURL}}" aria-label="返回 {{.BlogName}} 博客首页">{{else}}<span class="sn-brand">{{end}}
-          {{if .LogoURL}}<img class="sn-brand__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="" width="38" height="38">{{end}}
+          {{if .LogoURL}}<img class="sn-brand__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="" width="38" height="38">{{else}}<img class="oss-brand-logo" src="/ui/assets/oss-logo.png?v=1" alt="" width="72" height="28">{{end}}
           <strong>{{if .BlogName}}{{.BlogName}}{{else}}星夜{{end}}</strong>
         {{if .BlogHomeURL}}</a>{{else}}</span>{{end}}
         <nav class="sn-actions" aria-label="博客与阅读工具">
@@ -37,7 +40,7 @@
         </nav>
       </header>
       <div class="sn-sky__core">
-        {{if .LogoURL}}<img class="sn-sky__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="{{.BlogName}} Logo" style="--sn-hero-logo-size: {{if gt .LogoSize 0}}{{.LogoSize}}{{else}}104{{end}}px" width="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}104{{end}}" height="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}104{{end}}">{{end}}
+        {{if .LogoURL}}<img class="sn-sky__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="{{.BlogName}} Logo" style="--sn-hero-logo-size: {{if gt .LogoSize 0}}{{.LogoSize}}{{else}}104{{end}}px" width="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}104{{end}}" height="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}104{{end}}">{{else}}<img class="oss-brand-logo oss-brand-logo--hero" src="/ui/assets/oss-logo.png?v=1" alt="OSS Sync" width="160" height="63">{{end}}
         <p class="sn-kicker">✦ STAR · NIGHT ✦</p>
         {{if .BlogName}}<h1 id="blog-title">{{.BlogName}}</h1>{{else}}<h1 id="blog-title">星夜</h1>{{end}}
         {{if .Description}}<p class="sn-sky__desc">{{.Description}}</p>{{end}}
@@ -50,7 +53,7 @@
   <header class="sn-topbar">
     <div class="sn-topbar__inner">
       {{if .BlogHomeURL}}<a class="sn-brand" href="{{.BlogHomeURL}}" aria-label="返回 {{.BlogName}} 博客首页">{{else}}<span class="sn-brand">{{end}}
-        {{if .LogoURL}}<img class="sn-brand__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="" width="38" height="38">{{end}}
+        {{if .LogoURL}}<img class="sn-brand__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="" width="38" height="38">{{else}}<img class="oss-brand-logo" src="/ui/assets/oss-logo.png?v=1" alt="" width="72" height="28">{{end}}
         <strong>{{if .BlogName}}{{.BlogName}}{{else}}星夜{{end}}</strong>
       {{if .BlogHomeURL}}</a>{{else}}</span>{{end}}
       <nav class="sn-actions" aria-label="博客与阅读工具">

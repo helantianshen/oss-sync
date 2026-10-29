@@ -1,6 +1,7 @@
 // 侧边栏视图：展示同步状态、分享管理、协作邀请与未解决冲突
 import { ItemView, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 import type OSSPlugin from "./main";
+import { OSS_LOGO_DATA_URL } from "./brand";
 
 /** 侧边栏视图在 Obsidian 中的注册类型标识 */
 export const SIDEBAR_VIEW_TYPE = "oss-sync-sidebar";
@@ -56,7 +57,7 @@ export class SidebarView extends ItemView {
     const { contentEl, plugin } = this;
     const header = contentEl.createDiv({ cls: "oss-sidebar-header" });
     const icon = header.createDiv({ cls: "oss-sidebar-mark", attr: { "aria-hidden": "true" } });
-    setIcon(icon, "refresh-cw");
+    icon.createEl("img", { attr: { src: OSS_LOGO_DATA_URL, alt: "", width: "52", height: "21" } });
 
     const copy = header.createDiv({ cls: "oss-sidebar-heading" });
     copy.createEl("h3", { text: plugin.t("sidebar.title") });

@@ -1,5 +1,12 @@
 # OSS Sync
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="internal/webui/assets/oss-logo-light.png">
+    <img src="internal/webui/assets/oss-logo.png" alt="OSS Sync" width="240" height="95">
+  </picture>
+</p>
+
   
 
 > 自托管的 Obsidian 同步与分享服务：笔记、附件、协作与公开博客，一个二进制完成部署。

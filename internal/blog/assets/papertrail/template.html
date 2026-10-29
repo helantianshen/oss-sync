@@ -10,13 +10,16 @@
   <script data-cfasync="false" src="/ui/assets/theme.js?v=2"></script>
   <link rel="stylesheet" href="{{.ThemeBaseURL}}/style.css?v=4">
   <script defer src="{{.ThemeBaseURL}}/theme.js?v=5"></script>
+  <link rel="icon" href="/favicon.ico?v=2" sizes="16x16 32x32 48x48">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+  <link rel="stylesheet" href="/ui/assets/brand.css?v=1">
 </head>
 <body id="top">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header class="pt-topbar">
     <div class="pt-topbar__inner">
       {{if .BlogHomeURL}}<a class="pt-brand" href="{{.BlogHomeURL}}" aria-label="返回 {{.BlogName}} 博客首页">{{else}}<span class="pt-brand">{{end}}
-        {{if .LogoURL}}<img class="pt-brand__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="" width="38" height="38">{{else}}<span class="pt-brand__mark" aria-hidden="true">PT</span>{{end}}
+        {{if .LogoURL}}<img class="pt-brand__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="" width="38" height="38">{{else}}<img class="oss-brand-logo" src="/ui/assets/oss-logo.png?v=1" alt="" width="72" height="28">{{end}}
         {{if .BlogName}}<strong>{{.BlogName}}</strong>{{else}}<strong>Papertrail</strong>{{end}}
       {{if .BlogHomeURL}}</a>{{else}}</span>{{end}}
 
@@ -43,7 +46,7 @@
     {{if .IsHome}}
     <section class="pt-home" aria-labelledby="blog-title">
       <header class="pt-hero">
-        {{if .LogoURL}}<img class="pt-hero__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="{{.BlogName}} Logo" style="--pt-hero-logo-size: {{if gt .LogoSize 0}}{{.LogoSize}}{{else}}96{{end}}px" width="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}96{{end}}" height="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}96{{end}}">{{end}}
+        {{if .LogoURL}}<img class="pt-hero__logo{{if eq .LogoShape "circle"}} is-circle{{end}}" data-theme-logo src="{{.LogoURL}}" alt="{{.BlogName}} Logo" style="--pt-hero-logo-size: {{if gt .LogoSize 0}}{{.LogoSize}}{{else}}96{{end}}px" width="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}96{{end}}" height="{{if gt .LogoSize 0}}{{.LogoSize}}{{else}}96{{end}}">{{else}}<img class="oss-brand-logo oss-brand-logo--hero" src="/ui/assets/oss-logo.png?v=1" alt="OSS Sync" width="160" height="63">{{end}}
         <div>
           <span class="pt-kicker">Public notebook</span>
           {{if .BlogName}}<h1 id="blog-title">{{.BlogName}}</h1>{{else}}<h1 id="blog-title">Papertrail</h1>{{end}}

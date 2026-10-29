@@ -3,6 +3,7 @@ import type { ButtonComponent } from "obsidian";
 import type OSSPlugin from "./main";
 import type { OSSSettings } from "./settings";
 import { validateLoginCredentials, validateServerURL } from "./login-state";
+import { OSS_LOGO_DATA_URL } from "./brand";
 
 /** 插件设置页：按语言、服务端、仓库、设备、同步与更新分组渲染表单，并维护仓库下拉的定时刷新 */
 export class OSSSettingTab extends PluginSettingTab {
@@ -19,6 +20,10 @@ export class OSSSettingTab extends PluginSettingTab {
     this.stopVaultRefresh();
     const { containerEl } = this;
     containerEl.empty();
+
+    const brand = containerEl.createDiv({ cls: "oss-settings-brand" });
+    brand.createEl("img", { attr: { src: OSS_LOGO_DATA_URL, alt: "", width: "72", height: "28" } });
+    brand.createEl("h2", { text: "OSS Sync" });
 
     // 语言与服务端分区：界面语言、服务端地址与登录态，登录前后渲染不同表单
 

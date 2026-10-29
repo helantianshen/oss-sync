@@ -6,6 +6,8 @@ This document records the visual system already implemented by the OSS Sync web 
 
 The console is a precise, utilitarian sync ledger: cool neutral surfaces, cobalt actions, compact metadata, and squared controls. Its signature is the visible grid canvas paired with ink-like offset shadows, making operational panels feel like physical records without becoming decorative. The Obsidian plugin is a denser companion surface that inherits the host theme instead of reproducing the web-console chrome.
 
+The project mark is the connected OSS monogram in `internal/webui/assets/oss-logo.png`. Authentication pages, console navigation, the public directory and built-in blog fallbacks share `brand.css`; dark mode presents the same silhouette in white. Blog-provided logos keep precedence and their own sizing. The plugin embeds the mark in `src/brand.ts` for offline headers and settings. Browser and touch icons use the square `oss-icon.png` and multi-size `favicon.ico`; README images provide both light and dark variants.
+
 ## 2. Color
 
 ### Palette

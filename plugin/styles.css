@@ -193,17 +193,39 @@
 
 .oss-sidebar-mark {
   display: grid;
-  width: 28px;
+  width: 52px;
   height: 28px;
   place-items: center;
-  color: var(--interactive-accent);
-  background: var(--background-modifier-hover);
-  border-radius: var(--radius-s);
 }
 
-.oss-sidebar-mark svg {
-  width: 16px;
-  height: 16px;
+.oss-sidebar-mark img {
+  display: block;
+  width: 52px;
+  height: 21px;
+  object-fit: contain;
+}
+
+.oss-settings-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-block-end: 24px;
+}
+
+.oss-settings-brand img {
+  display: block;
+  width: 72px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.oss-settings-brand h2 {
+  margin: 0;
+}
+
+.theme-dark .oss-sidebar-mark img,
+.theme-dark .oss-settings-brand img {
+  filter: brightness(0) invert(1);
 }
 
 .oss-sidebar-heading {

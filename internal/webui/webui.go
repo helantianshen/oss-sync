@@ -159,6 +159,11 @@ func (h *Handler) Register(r *gin.Engine) {
 	r.GET("/ui/assets/app.js", h.script("app.js", "text/javascript; charset=utf-8"))
 	r.GET("/ui/assets/metrics.js", h.script("metrics.js", "text/javascript; charset=utf-8"))
 	r.GET("/ui/assets/theme.js", h.script("theme.js", "text/javascript; charset=utf-8"))
+	r.GET("/ui/assets/brand.css", h.script("brand.css", "text/css; charset=utf-8"))
+	r.GET("/ui/assets/oss-logo.png", h.script("oss-logo.png", "image/png"))
+	r.GET("/ui/assets/oss-icon.png", h.script("oss-icon.png", "image/png"))
+	r.GET("/favicon.ico", h.script("favicon.ico", "image/x-icon"))
+	r.GET("/apple-touch-icon.png", h.script("oss-icon.png", "image/png"))
 	r.GET("/ui/themes/:theme/*filepath", h.consoleThemeAsset)
 
 	// 登录、注册、登出（公开）

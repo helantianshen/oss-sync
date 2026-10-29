@@ -1,6 +1,6 @@
 {
   "name": "oss-sync-plugin",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "description": "Obsidian plugin for OSS (Obsidian Sync & Share) — self-hosted sync & lightweight blog publishing.",
   "private": true,
   "scripts": {

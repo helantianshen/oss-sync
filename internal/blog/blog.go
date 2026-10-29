@@ -522,7 +522,7 @@ func (h *Handler) redirectToLogin(c *gin.Context) {
 func (h *Handler) renderSharePasswordPrompt(c *gin.Context, share models.Share) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Status(http.StatusUnauthorized)
-	c.String(http.StatusUnauthorized, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>需要密码</title></head><body><form method="get"><label>密码：<input type="password" name="password" required></label><button type="submit">访问</button></form></body></html>`)
+	c.String(http.StatusUnauthorized, `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>需要密码 · OSS Sync</title><link rel="icon" href="/favicon.ico?v=2"><link rel="stylesheet" href="/ui/assets/brand.css?v=1"></head><body><img class="oss-brand-logo" src="/ui/assets/oss-logo.png?v=1" alt="OSS Sync" width="72" height="28"><form method="get"><label>密码：<input type="password" name="password" required></label><button type="submit">访问</button></form></body></html>`)
 }
 
 func (h *Handler) handleSingle(c *gin.Context) {

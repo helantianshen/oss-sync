@@ -1,5 +1,12 @@
 # OSS Sync
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="internal/webui/assets/oss-logo-light.png">
+    <img src="internal/webui/assets/oss-logo.png" alt="OSS Sync" width="240" height="95">
+  </picture>
+</p>
+
 > Self-hosted Obsidian sync and share: notes, attachments, collaboration, and a public blog, deployed from a single binary.
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)](https://go.dev)

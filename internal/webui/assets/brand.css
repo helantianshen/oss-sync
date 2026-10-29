@@ -1,0 +1,33 @@
+.oss-brand-logo {
+  display: block;
+  flex: none;
+  width: 72px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.oss-brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.oss-brand-logo--hero {
+  width: min(160px, 50vw);
+  height: auto;
+  margin: 0 auto 20px;
+}
+
+.oss-brand-logo--card {
+  width: 64px;
+  height: 64px;
+}
+
+html[data-theme="dark"] .oss-brand-logo:not(.oss-brand-logo--card) {
+  filter: brightness(0) invert(1);
+}
+
+.sidebar__head .oss-brand-logo {
+  width: 64px;
+  height: 26px;
+}
