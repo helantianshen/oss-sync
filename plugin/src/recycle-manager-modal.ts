@@ -1,3 +1,4 @@
+import { ConfirmModal } from "./confirm-modal";
 import { App, Modal, Notice } from "obsidian";
 import type { RecycleBinFile } from "./api";
 import type OSSPlugin from "./main";
@@ -84,7 +85,7 @@ export class RecycleManagerModal extends Modal {
 
   /** 彻底删除前需用户确认，防止误操作不可恢复 */
   private async delete(vaultID: string, fileID: number, path: string): Promise<void> {
-    if (!window.confirm(this.plugin.t("recycle.deleteConfirm", { path }))) return;
+    if (!await ConfirmModal.ask(this.app, this.plugin.t("recycle.deleteConfirm", { path }), this.plugin.t("recycle.delete"), this.plugin.t("common.cancel"))) return;
     try {
       await this.plugin.api.recycleDelete(vaultID, fileID);
       await this.load();

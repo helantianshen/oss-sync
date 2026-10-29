@@ -132,7 +132,6 @@ export interface ServerUpdatePollerDeps {
 
 /** 有界轮询控制器；实例非线程安全，stop 与 poll 需串行调用*/
 export class ServerUpdatePoller {
-  private timer: ReturnType<typeof setTimeout> | null = null;
   private aborted = false;
   private startedAt = 0;
   private attempts = 0;
@@ -143,7 +142,7 @@ export class ServerUpdatePoller {
   constructor(
     private readonly deps: ServerUpdatePollerDeps,
     private readonly opts: ServerUpdatePollerOptions,
-    private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise<void>((resolve) => window.setTimeout(resolve, ms)),
   ) {
     this.intervalMs = opts.intervalMs ?? SERVER_UPDATE_POLL_INTERVAL_MS;
     this.maxAttempts = opts.maxAttempts ?? SERVER_UPDATE_MAX_ATTEMPTS;
@@ -160,10 +159,6 @@ export class ServerUpdatePoller {
 
   stop(): void {
     this.aborted = true;
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
   }
 
   dispose(): void {
@@ -175,7 +170,6 @@ export class ServerUpdatePoller {
     this.attempts = 0;
     this.startedAt = Date.now();
     let lastStatus: ServerUpdateStatusResponse | null = null;
-    let consecutiveTransientErrors = 0;
 
     while (!this.aborted) {
       if (signal?.aborted) {
@@ -193,7 +187,6 @@ export class ServerUpdatePoller {
       try {
         const status = await this.deps.getStatus();
         lastStatus = status;
-        consecutiveTransientErrors = 0;
 
         const outcome = this.evaluateTerminal(status);
         if (outcome !== null) return outcome;
@@ -203,27 +196,7 @@ export class ServerUpdatePoller {
         if (isStaleRoleError(error)) {
           return { kind: "auth_error", error };
         }
-        if (isTransientConnectionError(error)) {
-          consecutiveTransientErrors += 1;
-          // 重启期间连接中断属于预期情况，继续有界轮询
-          // 连续瞬断仍受尝试次数与总时长上限约束
-        } else {
-          // 非瞬断的 API 错误在轮询中同样计为可容忍错误，继续等待
-          // 重启期间的 5xx 错误同样继续轮询
-          const rawStatus = (error as { status?: unknown })?.status;
-          const statusNum = typeof rawStatus === "number" ? rawStatus : error instanceof OSSApiError ? error.status : undefined;
-          const is5xx = typeof statusNum === "number" && statusNum >= 500;
-          const is4xx = typeof statusNum === "number" && statusNum >= 400 && statusNum < 500;
-          if (is5xx) {
-            consecutiveTransientErrors += 1;
-          } else if (is4xx) {
-            // 除 401/403 外的 4xx 计为失败尝试，仍在有界次数内继续轮询
-            consecutiveTransientErrors += 1;
-          } else {
-            consecutiveTransientErrors += 1;
-          }
-        }
-        // 瞬断次数无单独上限，由尝试次数与总时长兜底
+        // 非认证错误在重启期间允许重试，受总时长与尝试次数约束
       }
 
       if (this.aborted || signal?.aborted) break;

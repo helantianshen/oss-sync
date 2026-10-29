@@ -1,3 +1,4 @@
+import { ConfirmModal } from "./confirm-modal";
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type { ButtonComponent } from "obsidian";
 import type OSSPlugin from "./main";
@@ -24,7 +25,7 @@ export class OSSSettingTab extends PluginSettingTab {
 
     const brand = containerEl.createDiv({ cls: "oss-settings-brand" });
     brand.createEl("img", { attr: { src: OSS_LOGO_DATA_URL, alt: "", width: "72", height: "28" } });
-    brand.createEl("h2", { text: "OSS Sync" });
+    new Setting(brand).setName("OSS Sync").setHeading();
 
     // 语言与服务端分区：界面语言、服务端地址与登录态，登录前后渲染不同表单
 
@@ -520,7 +521,6 @@ export class OSSSettingTab extends PluginSettingTab {
     let isChecking = false;
     let isTriggering = false;
     let isPolling = false;
-    let lastPollCount = 0;
 
     const versionSetting = new Setting(containerEl)
       .setName(this.plugin.t("settings.serverUpdate.statusLabel"))
@@ -557,7 +557,7 @@ export class OSSSettingTab extends PluginSettingTab {
 
     const doTrigger = async (): Promise<void> => {
       if (!checkId || !candidateVersion) return;
-      if (!window.confirm(`确认将服务端更新到 ${candidateVersion}？`)) return;
+      if (!await ConfirmModal.ask(this.app, `确认将服务端更新到 ${candidateVersion}？`, `更新到 ${candidateVersion}`, this.plugin.t("common.cancel"))) return;
       if (isTriggering || isPolling) return;
       isTriggering = true;
       triggerButton?.setDisabled(true);
@@ -568,11 +568,9 @@ export class OSSSettingTab extends PluginSettingTab {
         if (!trigger.ok) throw new Error(trigger.error ?? trigger.code);
         isTriggering = false;
         isPolling = true;
-        lastPollCount = 0;
         const poller = this.plugin.createServerUpdatePoller({ expectedVersion: candidateVersion! });
         const outcome = await poller.poll();
         isPolling = false;
-        lastPollCount = poller.getAttempts();
         if (outcome.kind === "success") {
           currentVersion = outcome.version;
           versionSetting.setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));

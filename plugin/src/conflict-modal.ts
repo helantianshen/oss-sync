@@ -137,6 +137,7 @@ export class ConflictModal extends Modal {
           preview.createDiv({ cls: "oss-diff-row is-omitted", text: this.plugin.t("conflict.diffReference") });
         }
       } catch {
+        // 参考差异失败不影响下方的冲突解决选项
       }
     }
 
@@ -375,7 +376,7 @@ function renderFinalPreview(
 
 /** 按路径分隔符插入软换行点，避免长路径撑破容器 */
 function appendTextWithPathBreaks(element: HTMLElement, text: string): void {
-  for (const part of text.split(/(?=[\/\\])/)) {
+  for (const part of text.split(/(?=[/\\])/)) {
     if (part.length === 0) continue;
     if (part[0] === "/" || part[0] === "\\") {
       element.createEl("wbr");

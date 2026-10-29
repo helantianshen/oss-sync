@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Setting, TFile } from "obsidian";
+import { App, Modal, Notice, Setting } from "obsidian";
 import type OSSPlugin from "./main";
 import { localizeError } from "./localized-error";
 import type { CollabEntry, OSSApiClient } from "./api";
@@ -62,6 +62,7 @@ export class CollabManager {
       onChange: () => this.onChange(),
       coordinator: this.coordinator,
       noticeGuard: this.plugin.syncErrorNotices,
+      onConflict: () => this.plugin.activateSidebar(),
     });
     this.transport = new CollaborationTransport({
       api: this.api,
@@ -142,7 +143,7 @@ export class CollabManager {
         const deduped = new Map<string, CollabEntry>();
         const rank = (s: string) => (s === "accepted" ? 2 : s === "pending" ? 1 : 0);
         const consider = (e: CollabEntry) => {
-          const collabId = String((e as any).collaborator_id ?? e.collaborator_username ?? "");
+          const collabId = String(e.collaborator_id ?? e.collaborator_username ?? "");
           const key = `${e.vault_id}:${e.file_id}:${collabId}`;
           const prev = deduped.get(key);
           if (!prev) {

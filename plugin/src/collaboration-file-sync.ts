@@ -330,7 +330,7 @@ export class CollaborationFileSync {
       ancestorText,
       local: localContent,
       remote: remoteContent,
-    } as any);
+    });
     // 简化处理：多数情况走统一的持久化策略，需与 remote-sync 保持一致
     // 若三方合并需要保留冲突，则持久化冲突；否则按决策上传或保留本地
     if (decision.kind === "persist_text_conflict") {

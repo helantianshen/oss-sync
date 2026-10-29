@@ -30,7 +30,6 @@ export class TaskPool {
   /** 并发执行全部任务并等待完成；单个任务的失败不影响其余任务，重试耗尽后记为失败 */
   async run<T, R>(items: T[], worker: (item: T, index: number) => Promise<R>): Promise<TaskResult<R>[]> {
     const results: TaskResult<R>[] = new Array(items.length);
-    let cursor = 0;
     const waiting: Array<() => void> = [];
 
     const tryAcquire = (): Promise<void> => {
@@ -81,5 +80,5 @@ export class TaskPool {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

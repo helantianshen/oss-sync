@@ -45,6 +45,7 @@ export interface CollaborationRemoteSyncDeps {
   readonly createOperationID: () => string;
   readonly onChange: () => void;
   readonly coordinator: CollaborationSyncCoordinator;
+  readonly onConflict?: () => Promise<void>;
   /** 通知冷却抑制；缺省时每次失败都提示 */
   readonly noticeGuard?: { shouldShow: (key: string) => boolean; reset: (key?: string) => void };
 }
@@ -190,7 +191,7 @@ export class CollaborationRemoteSync {
         await this.deps.baseline.save();
         this.deps.onChange();
         new Notice(`协作冲突：${ac.localPath} 存在重叠编辑，已在右侧边栏等待解决`, 8000);
-        this.showConflictPopup(ac.localPath);
+        await this.showConflictPopup();
         break;
       }
       case "preserve_both": {
@@ -306,18 +307,12 @@ export class CollaborationRemoteSync {
     this.deps.onChange();
   }
 
-  private showConflictPopup(localPath: string): void {
+  /** 冲突已持久化，侧边栏打开失败不影响同步结果 */
+  private async showConflictPopup(): Promise<void> {
     try {
-      // 尝试自动揭示侧边栏，让用户第一时间看到冲突
-      const app: any = (this.deps as any).app ?? (globalThis as any)?.app;
-      if (app?.workspace) {
-        const leaves = app.workspace.getLeavesOfType?.("oss-sync-sidebar");
-        if (leaves?.length === 0) {
-          const leaf = app.workspace.getRightLeaf?.(false);
-          leaf?.setViewState?.({ type: "oss-sync-sidebar", active: true });
-          app.workspace.revealLeaf?.(leaf);
-        }
-      }
-    } catch {}
+      await this.deps.onConflict?.();
+    } catch {
+      // 用户仍可通过侧边栏命令查看已保存的冲突
+    }
   }
 }

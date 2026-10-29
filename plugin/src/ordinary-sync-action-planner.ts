@@ -1,3 +1,4 @@
+import { classifySyncPath } from "./blacklist.js";
 import type { BaselineEntry, PendingOperation } from "./baseline.js";
 import type { SyncFileMeta } from "./api.js";
 import type { ExpectedLocalState, OrdinarySyncAction, OrdinarySyncLocalMeta, OrdinarySyncPlannerInput, OrdinarySyncPlanResult } from "./ordinary-sync-actions.js";
@@ -8,17 +9,11 @@ export type OrdinarySyncCandidatePathsInput = Pick<
   "forceFull" | "remote" | "baseline" | "pending" | "conflicts" | "vaultPaths"
 >;
 
-function classify(path: string): "markdown" | "attachment" | "config" {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".md")) return "markdown";
-  if (lower.startsWith(".obsidian/")) return "config";
-  return "attachment";
+function remoteFromBaseline(path: string, baseline: BaselineEntry, configDir: string): SyncFileMeta {
+  return { path, type: classifySyncPath(path, configDir), hash: baseline.serverHash, size: baseline.localSize, mtime: baseline.localMTime, revision: baseline.serverRevision, deleted: baseline.serverDeleted };
 }
-function remoteFromBaseline(path: string, baseline: BaselineEntry): SyncFileMeta {
-  return { path, type: classify(path), hash: baseline.serverHash, size: baseline.localSize, mtime: baseline.localMTime, revision: baseline.serverRevision, deleted: baseline.serverDeleted };
-}
-function compactedDelete(path: string): SyncFileMeta {
-  return { path, type: classify(path), hash: "", size: 0, mtime: 0, revision: 0, deleted: true };
+function compactedDelete(path: string, configDir: string): SyncFileMeta {
+  return { path, type: classifySyncPath(path, configDir), hash: "", size: 0, mtime: 0, revision: 0, deleted: true };
 }
 function expected(local: OrdinarySyncLocalMeta | null): ExpectedLocalState {
   if (local === null) return { kind: "absent" };
@@ -75,7 +70,7 @@ export function planOrdinarySyncActions(input: OrdinarySyncPlannerInput): Ordina
     const local = localByPath.get(path) ?? null;
     const submitted = remote.get(path);
     // 增量同步下 remote 不含未变更路径，用基线还原一份服务端视图；完整快照时不能补，否则会把已删除的远端当作存在
-    const server = submitted ?? (!forceFull && base !== null ? remoteFromBaseline(path, base) : undefined);
+    const server = submitted ?? (!forceFull && base !== null ? remoteFromBaseline(path, base, input.configDir) : undefined);
     const operation = pendingByPath.get(path);
     if (base === null) {
       if (operation?.kind === "delete") {
@@ -113,7 +108,7 @@ export function planOrdinarySyncActions(input: OrdinarySyncPlannerInput): Ordina
       } else if (local.hash === base.serverHash) {
         actions.push({ kind: "delete_local_absent", path, expectedLocal: expected(local) });
       } else {
-        actions.push({ kind: "conflict", path, local, remote: compactedDelete(path), expectedLocal: expected(local) });
+        actions.push({ kind: "conflict", path, local, remote: compactedDelete(path, input.configDir), expectedLocal: expected(local) });
       }
       continue;
     }

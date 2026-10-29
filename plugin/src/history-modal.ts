@@ -69,8 +69,8 @@ export class HistoryModal extends Modal {
         this.plugin.getLanguage() === "zh" ? "zh-CN" : "en-US"
       ),
     });
-    container.createEl("span", { cls: "oss-history-user", text: entry.username });
-    container.createEl("span", { cls: "oss-history-device", text: entry.device_name || this.plugin.t("common.unknown") });
+    container.createSpan({ cls: "oss-history-user", text: entry.username });
+    container.createSpan({ cls: "oss-history-device", text: entry.device_name || this.plugin.t("common.unknown") });
     container.createEl("button", {
       cls: "oss-history-view",
       text: this.plugin.t("history.view"),

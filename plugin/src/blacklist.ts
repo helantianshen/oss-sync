@@ -12,11 +12,11 @@ const ABSOLUTE_BLACKLIST: BlacklistEntry[] = [
 ];
 
 const DEVICE_LOCAL_OBSIDIAN: BlacklistEntry[] = [
-  { kind: "exact", value: ".obsidian/workspace.json" },
-  { kind: "exact", value: ".obsidian/workspace-mobile.json" },
-  { kind: "exact", value: ".obsidian/cache" },
-  { kind: "prefix", value: ".obsidian/cache/" },
-  { kind: "glob", value: ".obsidian/plugins/*/data.json" },
+  { kind: "exact", value: "workspace.json" },
+  { kind: "exact", value: "workspace-mobile.json" },
+  { kind: "exact", value: "cache" },
+  { kind: "prefix", value: "cache/" },
+  { kind: "glob", value: "plugins/*/data.json" },
 ];
 
 /** 黑名单条目：exact 为整路径，prefix 为目录前缀，glob 仅支持段内 * */
@@ -26,15 +26,19 @@ interface BlacklistEntry {
 }
 
 /** 判断相对路径是否应同步，设备本地状态始终排除 */
-export function shouldSync(relativePath: string): boolean {
+export function shouldSync(relativePath: string, configDir: string): boolean {
   const p = normalize(relativePath);
   if (p === "") return false;
 
   for (const entry of ABSOLUTE_BLACKLIST) {
     if (matches(entry, p)) return false;
   }
-  for (const entry of DEVICE_LOCAL_OBSIDIAN) {
-    if (matches(entry, p)) return false;
+  const prefix = normalize(configDir).replace(/\/$/, "") + "/";
+  if (p.startsWith(prefix)) {
+    const configPath = p.slice(prefix.length);
+    for (const entry of DEVICE_LOCAL_OBSIDIAN) {
+      if (matches(entry, configPath)) return false;
+    }
   }
   return true;
 }
@@ -70,3 +74,11 @@ export const _internal = {
   matches,
   normalize,
 };
+
+/** 按扩展名和当前 Vault 配置目录判断同步文件类型 */
+export function classifySyncPath(path: string, configDir: string): "markdown" | "attachment" | "config" {
+  const normalized = normalize(path).toLowerCase();
+  if (normalized.endsWith(".md")) return "markdown";
+  const prefix = normalize(configDir).replace(/\/$/, "").toLowerCase() + "/";
+  return normalized.startsWith(prefix) ? "config" : "attachment";
+}

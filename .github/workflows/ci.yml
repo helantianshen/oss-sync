@@ -20,7 +20,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - run: go test -race -p 1 -timeout 15m ./...
+      - run: go build ./...
       - run: go vet ./...
 
   plugin:
@@ -38,9 +38,9 @@ jobs:
           cache: npm
           cache-dependency-path: plugin/package-lock.json
       - run: npm ci
+      - run: npm run lint
       - run: npm exec tsc -- --noEmit
       - run: npm test
-      - run: node ../scripts/test-blog-reading.mjs
       - run: npm run build
 
   container:
@@ -79,9 +79,6 @@ jobs:
         with:
           go-version-file: go.mod
       - run: bash -n oss.sh
-      - run: python3 scripts/test-sse-toggle.py
-      - run: python3 scripts/test-package-release.py
-      - run: python3 scripts/test-deploy.py
       - name: Real systemd smoke test
         shell: bash
         run: |

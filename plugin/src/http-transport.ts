@@ -5,9 +5,7 @@
 // 协商结果，随后的 GET 可能被反复重定向直至报错；curl 与 Node https 不受影响。
 // 该失败只出现在 Obsidian 进程内，外部无法复现，因此以降级方式规避。
 
-import { requestUrl } from "obsidian";
-import type * as httpsType from "https";
-import type * as httpType from "http";
+import { Platform, requestUrl } from "obsidian";
 
 /** 请求描述；body 为字符串或二进制 */
 export interface HttpRequest {
@@ -24,19 +22,6 @@ export interface HttpResponse {
   readonly text: string;
   readonly arrayBuffer: ArrayBuffer;
   readonly headers: Record<string, string>;
-}
-
-/**
- * 按需取得 Node 内置模块
- * 移动端没有这些模块，顶层导入会让插件在初始化阶段直接失败；
- * 只有桌面端降级路径才会走到这里，取不到时抛错由调用方转为普通请求错误
- */
-function nodeModule(name: "https" | "http"): typeof httpsType | typeof httpType {
-  const req = typeof require === "function" ? require : undefined;
-  if (!req) {
-    throw new Error(`Node module ${name} unavailable`);
-  }
-  return req(name);
 }
 
 /** requestUrl 抛出的重定向循环属于网络栈问题，改用原生 https 重试 */
@@ -74,71 +59,74 @@ async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
     reportNonJson(request.url, response.status, response.text);
     return response;
   } catch (error) {
-    if (!isRetryableJsonFailure(error, request.method)) throw error;
+    if (!Platform.isDesktop || !isRetryableJsonFailure(error, request.method)) throw error;
     return viaNodeHttps(request);
   }
 }
 
 async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
   const target = new URL(request.url);
-  const transport = target.protocol === "http:" ? nodeModule("http") : nodeModule("https");
-  const payload =
-    request.body === undefined
-      ? undefined
-      : typeof request.body === "string"
-        ? Buffer.from(request.body, "utf-8")
-        : Buffer.from(request.body);
+  if (Platform.isDesktop) {
+    const transport = target.protocol === "http:" ? await import("http") : await import("https");
+    const payload =
+      request.body === undefined
+        ? undefined
+        : typeof request.body === "string"
+          ? Buffer.from(request.body, "utf-8")
+          : Buffer.from(request.body);
 
-  const raw = await new Promise<{ status: number; headers: httpType.IncomingHttpHeaders; body: Buffer }>(
-    (resolve, reject) => {
-      const req = transport.request(
-        {
-          protocol: target.protocol,
-          hostname: target.hostname,
-          port: target.port || (target.protocol === "https:" ? 443 : 80),
-          path: `${target.pathname}${target.search}`,
-          method: request.method,
-          headers: {
-            ...request.headers,
-            ...(payload ? { "Content-Length": String(payload.byteLength) } : {}),
+    const raw = await new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>(
+      (resolve, reject) => {
+        const req = transport.request(
+          {
+            protocol: target.protocol,
+            hostname: target.hostname,
+            port: target.port || (target.protocol === "https:" ? 443 : 80),
+            path: `${target.pathname}${target.search}`,
+            method: request.method,
+            headers: {
+              ...request.headers,
+              ...(payload ? { "Content-Length": String(payload.byteLength) } : {}),
+            },
           },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => chunks.push(chunk));
-          res.on("end", () => {
-            resolve({
-              status: res.statusCode ?? 0,
-              headers: res.headers,
-              body: Buffer.concat(chunks),
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (chunk: Buffer) => chunks.push(chunk));
+            res.on("end", () => {
+              resolve({
+                status: res.statusCode ?? 0,
+                headers: res.headers,
+                body: Buffer.concat(chunks),
+              });
             });
-          });
-        }
-      );
-      req.on("error", reject);
-      if (payload) req.write(payload);
-      req.end();
-    }
-  );
+          }
+        );
+        req.on("error", reject);
+        if (payload) req.write(payload);
+        req.end();
+      }
+    );
 
-  const text = raw.body.toString("utf-8");
-  let json: unknown = null;
-  try {
-    json = text.length > 0 ? JSON.parse(text) : null;
-  } catch {
-    json = null;
+    const text = raw.body.toString("utf-8");
+    let json: unknown = null;
+    try {
+      json = text.length > 0 ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    const arrayBuffer = raw.body.buffer.slice(
+      raw.body.byteOffset,
+      raw.body.byteOffset + raw.body.byteLength
+    ) as ArrayBuffer;
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw.headers)) {
+      if (typeof value === "string") headers[key] = value;
+    }
+    const response: HttpResponse = { status: raw.status, json, text, arrayBuffer, headers };
+    reportNonJson(request.url, response.status, text);
+    return response;
   }
-  const arrayBuffer = raw.body.buffer.slice(
-    raw.body.byteOffset,
-    raw.body.byteOffset + raw.body.byteLength
-  ) as ArrayBuffer;
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw.headers)) {
-    if (typeof value === "string") headers[key] = value;
-  }
-  const response: HttpResponse = { status: raw.status, json, text, arrayBuffer, headers };
-  reportNonJson(request.url, response.status, text);
-  return response;
+  throw new Error("Node transport is only available on desktop");
 }
 
 /** 发送请求；Chromium 网络栈重定向循环时自动降级到原生 https */
@@ -146,7 +134,7 @@ export async function httpRequest(request: HttpRequest): Promise<HttpResponse> {
   try {
     return await viaRequestUrl(request);
   } catch (error) {
-    if (!isRedirectLoop(error)) throw error;
+    if (!Platform.isDesktop || !isRedirectLoop(error)) throw error;
     return viaNodeHttps(request);
   }
 }

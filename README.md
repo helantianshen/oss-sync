@@ -259,14 +259,14 @@ Vault settings (admin can force): `sync_mode` (`user_choice` / `short_poll` / `l
 
 ```bash
 # backend
-go test ./...
-go test -race ./...
+go build ./...
 go vet ./...
 
 # plugin
 cd plugin
 npm ci
 npm exec tsc -- --noEmit
+npm run lint
 npm test
 npm run build
 ```

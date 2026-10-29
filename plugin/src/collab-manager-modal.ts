@@ -62,8 +62,8 @@ export class CollabManagerModal extends Modal {
   /** 渲染分区标题行：标题、数量与打开对应窗口的查看按钮 */
   private renderSectionHeader(titleKey: TranslationKey, variant: string, count: string, openDetail: () => void): void {
     const header = this.contentEl.createDiv({ cls: `oss-collab-section-header oss-collab-section-header--${variant}` });
-    header.createEl("span", { cls: "oss-collab-section-title", text: this.plugin.t(titleKey) });
-    header.createEl("span", { cls: "oss-collab-section-count", text: count });
+    header.createSpan({ cls: "oss-collab-section-title", text: this.plugin.t(titleKey) });
+    header.createSpan({ cls: "oss-collab-section-count", text: count });
     header.createEl("button", { cls: "oss-collab-view", text: this.plugin.t("collab.view") })
       .addEventListener("click", openDetail);
   }

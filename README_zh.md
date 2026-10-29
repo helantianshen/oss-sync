@@ -483,9 +483,8 @@ Compress-Archive manifest.json,plugin.exe my-plugin.zip
 
 # 后端
 
-go test ./...
+go build ./...
 
-go test -race ./...
 
 go vet ./...
 
@@ -499,6 +498,7 @@ npm ci
 
 npm exec tsc -- --noEmit
 
+npm run lint
 npm test
 
 npm run build

@@ -11,8 +11,8 @@ function isDeviceRevokedError(error: unknown): boolean {
 
 /** 生成本机稳定 clientId；优先 crypto.randomUUID，退化为时间戳加随机串 */
 export function createClientID(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
+  if (typeof window.crypto?.randomUUID === "function") {
+    return window.crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

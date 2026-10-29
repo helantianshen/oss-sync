@@ -1,5 +1,5 @@
 import debounce from "lodash.debounce";
-import { Notice, TFile } from "obsidian";
+import { Notice } from "obsidian";
 import type { App, Vault } from "obsidian";
 import { OSSApiClient, OSSApiError, type SyncFileMeta } from "./api.js";
 import {
@@ -9,7 +9,7 @@ import {
   type ConflictEntry,
   type PendingOperation,
 } from "./baseline.js";
-import { shouldSync } from "./blacklist.js";
+import { shouldSync, classifySyncPath } from "./blacklist.js";
 import type { ConflictResolution } from "./conflict-modal.js";
 import type { Diagnostics } from "./diagnostics.js";
 import { localizeError } from "./localized-error.js";
@@ -271,7 +271,7 @@ export class SyncEngine {
    */
   enqueueDeleteTree(folderPath: string): void {
     const root = normalizePath(folderPath).replace(/\/+$/, "");
-    if (!root || !shouldSync(root)) return;
+    if (!root || !shouldSync(root, this.vault.configDir)) return;
     const prefix = `${root}/`;
     this.enqueueChain = this.enqueueChain.then(async () => {
       await this.baseline.load();
@@ -282,7 +282,7 @@ export class SyncEngine {
         if (operation.oldPath?.startsWith(prefix)) paths.add(operation.oldPath);
       }
       for (const path of paths) {
-        if (shouldSync(path)) {
+        if (shouldSync(path, this.vault.configDir)) {
           this.baseline.putPending({ id: operationID(), kind: "delete", path, createdAt: Date.now() });
         }
       }
@@ -317,8 +317,8 @@ export class SyncEngine {
         this.recordDiscovery("collaboration_boundary", 1);
         continue;
       }
-      const from = shouldSync(oldPath);
-      const to = shouldSync(path);
+      const from = shouldSync(oldPath, this.vault.configDir);
+      const to = shouldSync(path, this.vault.configDir);
       if (!from && !to) continue;
       operations.push({ id: operationID(), kind: from && to ? "rename" : from ? "delete" : "upsert", path: to ? path : oldPath, oldPath: from && to ? oldPath : undefined, createdAt: Date.now() });
     }
@@ -340,11 +340,11 @@ export class SyncEngine {
    * 入队失败仅提示，不让后续本地事件因一次持久化失败而丢失
    */
   private enqueue(operation: PendingOperation): void {
-    if (!shouldSync(operation.path)) {
+    if (!shouldSync(operation.path, this.vault.configDir)) {
       this.recordDiscovery("event_filtered", 1, operation.id);
       return;
     }
-    if (operation.oldPath && !shouldSync(operation.oldPath)) return;
+    if (operation.oldPath && !shouldSync(operation.oldPath, this.vault.configDir)) return;
     if (this.isSuppressed(operation.path) || (operation.oldPath !== undefined && this.isSuppressed(operation.oldPath))) {
       this.recordDiscovery("event_suppressed", 1, operation.id);
       return;
@@ -398,7 +398,7 @@ export class SyncEngine {
       await this.applyStrategy();
       await this.baseline.load();
       for (const operation of this.baseline.pending()) {
-        if (!shouldSync(operation.path) || operation.oldPath && !shouldSync(operation.oldPath)) {
+        if (!shouldSync(operation.path, this.vault.configDir) || operation.oldPath && !shouldSync(operation.oldPath, this.vault.configDir)) {
           this.baseline.removePending(operation.id);
         }
       }
@@ -605,7 +605,7 @@ export class SyncEngine {
         throw error;
       }
       for (const file of page.files) {
-        if (shouldSync(file.path)) files.set(normalizePath(file.path), file);
+        if (shouldSync(file.path, this.vault.configDir)) files.set(normalizePath(file.path), file);
       }
       recoverySnapshot = recoverySnapshot || page.recovery_snapshot;
       cursor = page.next_cursor;
@@ -727,6 +727,7 @@ export class SyncEngine {
       localByPath.set(path, await this.readLocalMeta(path));
     }
     return planOrdinarySyncActions({
+      configDir: this.vault.configDir,
       forceFull,
       recoverySnapshot,
       remote,
@@ -749,7 +750,7 @@ export class SyncEngine {
     const entries = new Map<string, BaselineEntry>();
     for (const path of this.baseline.paths()) {
       const entry = this.baseline.get(path);
-      if (entry && shouldSync(path)) entries.set(path, entry);
+      if (entry && shouldSync(path, this.vault.configDir)) entries.set(path, entry);
     }
     return entries;
   }
@@ -758,7 +759,7 @@ export class SyncEngine {
   private vaultPaths(forceFull: boolean): readonly string[] {
     if (!forceFull) return [];
     return this.vault.getFiles()
-      .filter((file) => shouldSync(file.path))
+      .filter((file) => shouldSync(file.path, this.vault.configDir))
       .map((file) => normalizePath(file.path));
   }
 
@@ -770,7 +771,7 @@ export class SyncEngine {
   /** 对照磁盘与 Vault 索引检查可见文件，索引尚未收敛时禁止推导删除 */
   private async indexedLocalPaths(): Promise<Set<string>> {
     const indexed = new Set(this.vault.getFiles().map((file) => normalizePath(file.path))
-      .filter((path) => shouldSync(path)));
+      .filter((path) => shouldSync(path, this.vault.configDir)));
     const disk = new Set<string>();
     const folders = [""];
     while (folders.length > 0) {
@@ -778,11 +779,11 @@ export class SyncEngine {
       const entries = await this.vault.adapter.list(folder);
       for (const path of entries.files.map(normalizePath)) {
         if (path.split("/").some((part) => part.startsWith("."))) continue;
-        if (shouldSync(path)) disk.add(path);
+        if (shouldSync(path, this.vault.configDir)) disk.add(path);
       }
       for (const path of entries.folders.map(normalizePath)) {
         if (path.split("/").some((part) => part.startsWith("."))) continue;
-        if (shouldSync(`${path}/`)) folders.push(path);
+        if (shouldSync(`${path}/`, this.vault.configDir)) folders.push(path);
       }
       if (folders.length > 0) await sleep(0);
     }
@@ -807,7 +808,7 @@ export class SyncEngine {
         const operation = pendingByPath.get(path);
         return base && !base.serverDeleted && base.localHash && !paths.has(path) && !this.baseline.getConflict(path)
           && !path.split("/").some((part) => part.startsWith("."))
-          && shouldSync(path)
+          && shouldSync(path, this.vault.configDir)
           && (!occupied.has(path) || operation?.kind === "delete" && operation.source === "scan");
       });
       // 缺失源可能覆盖已有目标，必须检查正文后才能安全规划源删除
@@ -1013,7 +1014,7 @@ export class SyncEngine {
    * 历史压缩后远端已无该文件记录，无法比对修订号，直接移除基线与待办
    */
   private async applyCompactedDelete(action: Extract<OrdinarySyncAction, { readonly kind: "delete_local_absent" }>): Promise<OrdinarySyncActionOutcome> {
-    const remote = compactedDeleteMeta(action.path);
+    const remote = compactedDeleteMeta(action.path, this.vault.configDir);
     const deleted = await this.ordinaryFileAccess.deleteExact(action.path, action.expectedLocal);
     if (deleted.kind === "stale") {
       await this.recordConflict(action.path, deleted.actual, remote);
@@ -1155,7 +1156,7 @@ export class SyncEngine {
    * 附件在两侧内容一致时走解决器的保留双方路径；有序合并仅适用于文本
    */
   async resolveConflict(path: string, resolution: ConflictResolution): Promise<void> {
-    if (!shouldSync(path)) throw new Error(this.plugin.t("sync.conflictNotFound"));
+    if (!shouldSync(path, this.vault.configDir)) throw new Error(this.plugin.t("sync.conflictNotFound"));
     const vaultID = this.plugin.settings.vaultId;
     const conflict = this.baseline.getConflict(path);
     if (!vaultID || !conflict) throw new Error(this.plugin.t("sync.conflictNotFound"));
@@ -1394,14 +1395,8 @@ function conflictToMeta(conflict: ConflictEntry): SyncFileMeta {
 }
 
 /** 历史压缩后构造删除元数据，修订号为 0 表示无可比对版本 */
-function compactedDeleteMeta(path: string): SyncFileMeta {
-  return { path, type: classifyPath(path), hash: "", size: 0, mtime: 0, revision: 0, deleted: true };
-}
-
-/** 按扩展名与路径前缀判定文件类型，决定冲突时能否做文本合并 */
-function classifyPath(path: string): "markdown" | "attachment" | "config" {
-  if (path.toLowerCase().endsWith(".md")) return "markdown";
-  return path.toLowerCase().startsWith(".obsidian/") ? "config" : "attachment";
+function compactedDeleteMeta(path: string, configDir: string): SyncFileMeta {
+  return { path, type: classifySyncPath(path, configDir), hash: "", size: 0, mtime: 0, revision: 0, deleted: true };
 }
 
 /** 拷贝为独立 ArrayBuffer，避免把可能被复用的底层缓冲区交给传输层 */

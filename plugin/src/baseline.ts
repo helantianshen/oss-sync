@@ -325,19 +325,12 @@ export function normalizePath(path: string): string {
 function sanitizeCollaborationFiles(raw: unknown): Record<string, CollaborationBaselineEntry> {
   if (!raw || typeof raw !== "object") return {};
   const out: Record<string, CollaborationBaselineEntry> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+  for (const value of Object.values(raw as Record<string, unknown>)) {
     const sanitized = sanitizeCollaborationEntry(value);
     if (sanitized) {
       // 确保 key 与内容一致，防止持久化篡改
       const expected = collaborationKey(sanitized.vaultId, sanitized.fileId);
       out[expected] = sanitized;
-      if (expected !== key) {
-        // 忽略原始 key，使用规范 key
-      }
-    } else if (value && typeof value === "object") {
-      const r = value as Record<string, unknown>;
-      // 尝试保留有效但 pending 非法的记录（已在 sanitize 中处理）
-      // 若整体无效则丢弃该条，防止无效 revision 导致 400
     }
   }
   return out;

@@ -83,7 +83,7 @@ export class CollabOutgoingModal extends Modal {
       else this.selectedArticleKeys.delete(key);
       this.render();
     });
-    const name = label.createEl("span", { cls: "oss-ellipsis" });
+    const name = label.createSpan({ cls: "oss-ellipsis" });
     name.setText(article.file_path);
     name.setAttribute("title", article.file_path);
     row.createDiv({ cls: "oss-manager-meta", text: this.plugin.t("collab.collaboratorCount", { count: entries.length }) });
@@ -168,7 +168,7 @@ export class CollabCollaboratorsModal extends Modal {
       revokeSelected.disabled = this.selectedIDs.size === 0;
       revokeSelected.setText(this.plugin.t("collab.revokeSelected", { count: this.selectedIDs.size }));
     });
-    label.createEl("span", { text: entry.collaborator_username });
+    label.createSpan({ text: entry.collaborator_username });
     const toggleHost = row.createDiv({ cls: "oss-collaborator-history-toggle" });
     new Setting(toggleHost)
       .setName(this.plugin.t("collab.historyView"))

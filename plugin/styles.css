@@ -219,8 +219,10 @@
   object-fit: contain;
 }
 
-.oss-settings-brand h2 {
+.oss-settings-brand .setting-item {
   margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .theme-dark .oss-sidebar-mark img,
@@ -621,11 +623,6 @@
 .oss-manager-select span {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* 含勾选框的行沿用 3 列基础布局；协作者详情行由前面的规则覆盖为 5 列 */
-.oss-manager-modal .oss-sidebar-collab-row:has(.oss-manager-select) {
-  grid-template-columns: minmax(0, 1fr) max-content auto;
 }
 
 /* 文件行 3 列：勾选框与文件名、协作者数、按钮组 */

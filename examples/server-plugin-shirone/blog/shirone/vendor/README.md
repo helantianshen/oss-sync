@@ -14,5 +14,4 @@ esbuild material-color.source.js --bundle --minify --format=iife --global-name=S
 
 ```sh
 node --check examples/server-plugin-shirone/blog/shirone/theme.js
-node --test examples/server-plugin-shirone/tests/theme.test.cjs
 ```

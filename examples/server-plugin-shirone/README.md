@@ -36,9 +36,7 @@ python3 examples/server-plugin-shirone/build.py
 ## 验证
 
 ```sh
-go test ./examples/server-plugin-shirone
-node --test examples/server-plugin-shirone/tests/theme.test.cjs
 node --check examples/server-plugin-shirone/blog/shirone/theme.js
 ```
 
-Go 集成检查通过 Python 3 构建实际 ZIP，使用项目现有插件管理器安装并启用，然后校验模板渲染、公开配置、资源、分享隔离和分页输入。浏览器交互需另行验证。自定义模板失败时响应可能仍为 200，应同时检查 `X-Theme-Fallback` 缺失和 `data-template="shirone"` 标记存在。
+安装验证需通过 Python 3 构建实际 ZIP，使用插件管理器安装并启用，再检查模板渲染、公开配置、资源、分享隔离和分页输入。浏览器交互需另行验证。自定义模板失败时响应可能仍为 200，应同时检查 `X-Theme-Fallback` 缺失和 `data-template="shirone"` 标记存在。

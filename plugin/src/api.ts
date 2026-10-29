@@ -3,6 +3,7 @@
 // JWT 由插件通过 loadData()/saveData() 持久化
 // 失效或登录失败时抛错，由调用方决定 UI 提示
 
+import { classifySyncPath } from "./blacklist.js";
 import type { Diagnostics } from "./diagnostics";
 import type { OSSSettings } from "./settings";
 import { isValidOperationID, isValidServerRevision } from "./operation-id.js";
@@ -335,7 +336,8 @@ export class OSSApiClient {
   constructor(
     private settings: OSSSettings,
     private readonly diagnostics?: Diagnostics,
-    private readonly onTokenExpired?: () => Promise<void>
+    private readonly onTokenExpired?: () => Promise<void>,
+    private readonly configDir = ""
   ) {}
 
   /** 设置或清除当前令牌 */
@@ -557,7 +559,7 @@ export class OSSApiClient {
         content: res.arrayBuffer,
         meta: {
           path,
-          type: classifyPath(path),
+          type: classifySyncPath(path, this.configDir),
           hash: header(res.headers, "x-oss-hash"),
           size: res.arrayBuffer.byteLength,
           mtime: parseInt(header(res.headers, "x-oss-mtime") || "0", 10),
@@ -1094,7 +1096,7 @@ export class OSSApiClient {
   }
 
   /** 解析响应；4xx/5xx 时构造 OSSApiError 并透出服务端字段 */
-  private async parseResponse<T>(status: number, json: any, text: string): Promise<T> {
+  private async parseResponse<T>(status: number, json: unknown, text: string): Promise<T> {
     if (status >= 400) {
       // 服务端故障时可能返回 HTML 错误页，不能把 JSON 解析异常直接抛给用户
       let body: unknown = json;
@@ -1153,14 +1155,6 @@ function header(headers: Record<string, string>, name: string): string {
     if (key.toLowerCase() === target) return value;
   }
   return "";
-}
-
-/** 按路径推断文件类型；.obsidian 下的文件归为配置 */
-function classifyPath(path: string): "markdown" | "attachment" | "config" {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".md")) return "markdown";
-  if (lower.startsWith(".obsidian/")) return "config";
-  return "attachment";
 }
 
 // 错误响应体的字段访问全部经过类型守卫，外部响应不可信

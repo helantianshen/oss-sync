@@ -25,6 +25,7 @@ export function createOperationID(): string {
     const normalized = normalizeOperationID(raw);
     if (normalized) return normalized;
   } catch {
+    // WebCrypto 不可用时继续使用下方的本地标识生成逻辑
   }
   // 备用分支使用时间戳加随机串，同样符合字符集
   const fallback = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;

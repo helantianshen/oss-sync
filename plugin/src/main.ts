@@ -79,7 +79,7 @@ export default class OSSPlugin extends Plugin {
   /** 诊断事件输出，开启后写入控制台，协作类关键失败额外用 warn 级别确保可见 */
   private readonly diagnostics = new Diagnostics((event) => {
     if (this.settings.diagnosticsEnabled) {
-      console.log("[oss-sync]", event.kind, JSON.stringify(event));
+      console.debug("[oss-sync]", event.kind, JSON.stringify(event));
       // 同时用 warn 级别输出，确保过滤 debug 的控制台仍可见关键协作失败
       if (event.kind === "api_error" || event.kind === "collab_upload_attempt") {
         console.warn("[oss-sync]", event.kind, JSON.stringify(event));
@@ -109,22 +109,20 @@ export default class OSSPlugin extends Plugin {
    */
   constructor(app: App, manifest: PluginManifest) {
     super(app, manifest);
-    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired());
+    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired(), this.app.vault.configDir);
   }
 
   /** 插件加载：恢复设置与凭据，装配各子系统，注册事件、命令与设置页，并在布局就绪后触发首轮同步 */
   async onload(): Promise<void> {
-    console.log("[oss-sync] plugin loading version", this.manifest.version);
     this.loaded = true;
     // 非 JSON 响应体通常是服务端异常页，记录原文便于定位
     setNonJsonSink((info) => {
       console.warn("[oss-sync] non-JSON response", JSON.stringify(info));
     });
     await this.loadSettings();
-    console.log("[oss-sync] diagnosticsEnabled=", this.settings.diagnosticsEnabled);
     this.emitRuntimeInfo();
 
-    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired());
+    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired(), this.app.vault.configDir);
     if (this.token) this.api.setToken(this.token);
 
     this.baseline = new BaselineStore(this.app.vault);
@@ -374,7 +372,7 @@ export default class OSSPlugin extends Plugin {
   }
 
   /** 打开侧边栏：已存在则揭示，否则在右栏创建视图 */
-  private async activateSidebar(): Promise<void> {
+  async activateSidebar(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(SIDEBAR_VIEW_TYPE);
     if (leaves.length > 0) {
       await this.app.workspace.revealLeaf(leaves[0]);
@@ -686,7 +684,7 @@ export default class OSSPlugin extends Plugin {
 
   /** 管理员启动后延迟检查服务端版本，失败时保持静默 */
   private async autoCheckServerUpdates(): Promise<void> {
-    await new Promise((r) => setTimeout(r, 5000));
+    await new Promise((r) => window.setTimeout(r, 5000));
     if (!this.loaded || !this.isLoggedIn() || !this.isAdmin()) return;
     try {
       const check = await this.checkServerUpdate();
@@ -694,7 +692,9 @@ export default class OSSPlugin extends Plugin {
         const latest = check.latest_version ?? check.candidate?.version ?? "";
         new Notice(`服务器有新版本 ${latest}（当前 ${check.current_version}），请到设置 → 服务端更新中一键更新`, 10000);
       }
-    } catch {}
+    } catch {
+      // 自动检查失败不打断启动，用户仍可在设置页手动重试
+    }
   }
 
   /** 登出：清空令牌与绑定、停止后台任务，并复查磁盘数据确保令牌未残留 */
@@ -1004,7 +1004,6 @@ export default class OSSPlugin extends Plugin {
   async applyConflictResolution(path: string, r: ConflictResolution): Promise<void> {
     await this.syncEngine.resolveConflict(path, r);
     const isOrdered = typeof r === "object" && (r as { kind: string }).kind === "ordered_merge";
-    const key: TranslationKey = isOrdered ? "conflict.orderedMergeButton" : (r as "accept_remote" | "force_local" | "keep_both") as unknown as TranslationKey;
     const resolutionKeys: Record<string, TranslationKey> = {
       accept_remote: "conflict.acceptRemoteButton",
       force_local: "conflict.forceLocalButton",

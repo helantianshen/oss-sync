@@ -258,11 +258,6 @@ export async function resolvePersistedCollaborationConflict(
 ): Promise<void> {
   const entry = deps.baseline.getCollaboration(vaultId, fileId);
   if (!entry?.conflict) throw new Error(deps.plugin.t("sync.conflictNotFound"));
-  const accepted: AcceptedCollaborationFile = {
-    vaultId,
-    fileId,
-    localPath: entry.localPath,
-  };
   const conflictRev = entry.conflict.remoteRevision;
   const conflictText = entry.conflict.remoteText;
 
@@ -432,7 +427,9 @@ export async function resolvePersistedCollaborationConflict(
             await deps.baseline.save();
             deps.onChange();
           }
-        } catch {}
+        } catch {
+          // 刷新失败时保留已有冲突记录，并继续提示原始上传错误
+        }
         const message = localizeError(error as Error, deps.plugin.t.bind(deps.plugin), deps.plugin.t("common.unknownError"));
         new Notice(deps.plugin.t("collab.uploadFailed", { error: message }));
         return;

@@ -74,7 +74,7 @@ export class SidebarView extends ItemView {
 
   /** 渲染状态区：用户、设备、仓库、协作连接与同步模式 */
   private renderStatus(): void {
-    const { plugin, contentEl } = this;
+    const { plugin } = this;
     const status = this.createSection(plugin.t("sidebar.status"));
     status.createDiv({
       cls: "oss-sidebar-status-line",
@@ -103,7 +103,7 @@ export class SidebarView extends ItemView {
 
   /** 渲染操作区：全量同步与打开设置；未绑定仓库时同步按钮改为提示绑定 */
   private renderActions(): void {
-    const { plugin, contentEl } = this;
+    const { plugin } = this;
     const actions = this.createSection(plugin.t("sidebar.actions"));
     const cluster = actions.createDiv({ cls: "oss-sidebar-actions oss-sidebar-actions--two-column" });
     cluster.createEl("button", { text: plugin.t("sidebar.sync"), cls: "mod-cta" })
@@ -155,7 +155,7 @@ export class SidebarView extends ItemView {
 
   /** 渲染冲突区；普通冲突与协作冲突都没有时整段不渲染 */
   private renderConflicts(): void {
-    const { plugin, contentEl } = this;
+    const { plugin } = this;
     const conflicts = plugin.baseline.conflicts();
     const collabConflicts = plugin.baseline.collaborationEntries().filter((e) => e.conflict !== null);
     if (conflicts.length === 0 && collabConflicts.length === 0) return;

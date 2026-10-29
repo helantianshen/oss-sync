@@ -96,6 +96,7 @@ export type OrdinarySyncPlanResult = {
 
 /** 规划器输入；remote 仅在完整快照或本地有基线时可信，故以 forceFull 区分 */
 export type OrdinarySyncPlannerInput = {
+  readonly configDir: string;
   readonly forceFull: boolean;
   readonly recoverySnapshot: boolean;
   readonly remote: ReadonlyMap<string, SyncFileMeta>;
