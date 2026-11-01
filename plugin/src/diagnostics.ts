@@ -1,4 +1,7 @@
+import { redactDiagnosticText, sanitizeDiagnosticDetails, type DiagnosticDetails } from "./diagnostic-report";
+
 export type DiagnosticEvent =
+  | { readonly kind: "detail"; readonly at: number; readonly area: "transport" | "download" | "sync_action" | "sync_run"; readonly stage: string; readonly details: DiagnosticDetails }
   | {
       readonly kind: "plugin_version_check";
       readonly at: number;
@@ -112,19 +115,28 @@ export type DiagnosticEvent =
 /** 仅保留脱敏后的有限事件记录，避免长期持有正文和令牌 */
 export class Diagnostics {
   private readonly events: DiagnosticEvent[] = [];
+  private readonly failures: DiagnosticEvent[] = [];
 
   constructor(
     private readonly sink?: (event: DiagnosticEvent) => void,
-    private readonly capacity = 200
+    private readonly capacity = 2000,
+    private readonly isEnabled: () => boolean = () => true,
   ) {}
 
   /** 记录事件；字段不合法时丢弃，超出容量时淘汰最旧一条 */
   record(event: DiagnosticEvent): void {
+    if (!this.isEnabled()) return;
     const safeEvent = sanitizeEvent(event);
     if (!safeEvent) return;
     this.events.push(Object.freeze(safeEvent));
     if (this.events.length > this.capacity) this.events.shift();
-    this.sink?.(safeEvent);
+    if (safeEvent.kind === "api_failed" || safeEvent.kind === "api_error"
+      || (safeEvent.kind === "sync_run" && safeEvent.phase === "failed")
+      || (safeEvent.kind === "detail" && /fail|error/.test(safeEvent.stage))) {
+      this.failures.push(safeEvent);
+      if (this.failures.length > 200) this.failures.shift();
+    }
+    try { this.sink?.(safeEvent); } catch { /* 诊断输出不得影响同步。 */ }
   }
 
   /** 返回事件快照副本，调用方无法改动内部缓冲 */
@@ -132,15 +144,22 @@ export class Diagnostics {
     return [...this.events];
   }
 
+  failureSnapshot(): readonly DiagnosticEvent[] {
+    return [...this.failures];
+  }
+
   /** 清空全部记录 */
   clear(): void {
     this.events.length = 0;
+    this.failures.length = 0;
   }
 }
 
 /** 按事件类型逐项校验并脱敏，返回 null 表示该事件应丢弃 */
 function sanitizeEvent(event: DiagnosticEvent): DiagnosticEvent | null {
   switch (event.kind) {
+    case "detail":
+      return { kind: "detail", at: finiteNumber(event.at), area: event.area, stage: event.stage.slice(0, 80), details: sanitizeDiagnosticDetails(event.details) };
     case "local_discovery":
       if (!["event_batch", "collaboration_boundary", "paths", "content", "incomplete", "delete_deferred", "event_suppressed", "event_filtered", "rename_applied", "rename_fallback", "rename_conflict"].includes(event.reason)) return null;
       return { kind: "local_discovery", at: finiteNumber(event.at), reason: event.reason, count: finiteNumber(event.count),
@@ -194,7 +213,7 @@ function sanitizeEvent(event: DiagnosticEvent): DiagnosticEvent | null {
         method: event.method,
         path: truncate(event.path, 200),
         ...(typeof event.status === "number" ? { status: finiteNumber(event.status) } : {}),
-        message: truncate(event.message, 300),
+        message: truncate(redactDiagnosticText(/Unexpected token|not valid JSON|JSON\.parse|JSON Parse error/i.test(event.message) ? "JSON decoding failed; response content omitted" : event.message), 300),
       };
     case "transfer":
       if (!isTransferScope(event.scope)) return null;

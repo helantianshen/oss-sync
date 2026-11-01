@@ -2,6 +2,8 @@
 
 import {
   App,
+  apiVersion,
+  Platform,
   getLanguage as getObsidianLanguage,
   Notice,
   Plugin,
@@ -59,7 +61,8 @@ import {
 } from "./i18n";
 import { localizeError } from "./localized-error";
 import { NoticeGuard } from "./notice-guard";
-import { httpRequest, setNonJsonSink } from "./http-transport";
+import { httpRequest, setNonJsonSink, setTransportDiagnosticSink } from "./http-transport";
+import { createDiagnosticReport, saveDiagnosticReport, diagnosticRoute } from "./diagnostic-report";
 import { ConflictOpeningGuard } from "./conflict-opening-guard";
 
 /** 插件持久化数据结构，在设置之外额外保存登录令牌 */
@@ -85,7 +88,7 @@ export default class OSSPlugin extends Plugin {
         console.warn("[oss-sync]", event.kind, JSON.stringify(event));
       }
     }
-  });
+  }, 2000, () => this.settings.diagnosticsEnabled);
   private token?: string;
   private statusBarEl?: HTMLElement;
   private ribbonEl?: HTMLElement;
@@ -115,9 +118,11 @@ export default class OSSPlugin extends Plugin {
   /** 插件加载：恢复设置与凭据，装配各子系统，注册事件、命令与设置页，并在布局就绪后触发首轮同步 */
   async onload(): Promise<void> {
     this.loaded = true;
-    // 非 JSON 响应体通常是服务端异常页，记录原文便于定位
+    setTransportDiagnosticSink((stage, details) => {
+      this.diagnostics.record({ kind: "detail", at: Date.now(), area: "transport", stage, details });
+    });
     setNonJsonSink((info) => {
-      console.warn("[oss-sync] non-JSON response", JSON.stringify(info));
+      this.diagnostics.record({ kind: "detail", at: Date.now(), area: "transport", stage: "non_json_response", details: { route: diagnosticRoute(info.url), status: info.status } });
     });
     await this.loadSettings();
     this.emitRuntimeInfo();
@@ -309,6 +314,7 @@ export default class OSSPlugin extends Plugin {
     if (this.pluginVersionCheckTimer !== null) window.clearInterval(this.pluginVersionCheckTimer);
     this.pluginVersionCheckTimer = null;
     setNonJsonSink(null);
+    setTransportDiagnosticSink(null);
     await this.syncEngine?.flushPendingQueue();
     this.syncEngine?.stop();
     this.collabManager?.stop();
@@ -463,6 +469,32 @@ export default class OSSPlugin extends Plugin {
     return this.diagnostics.snapshot();
   }
 
+  async exportDiagnosticLogs(): Promise<string> {
+    this.emitRuntimeInfo();
+    const json = createDiagnosticReport({
+      pluginVersion: this.manifest.version, obsidianVersion: apiVersion,
+      platform: Platform.isMobile ? "mobile" : "desktop",
+      userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+      serverURL: this.settings.serverUrl, loggedIn: this.api.hasToken(),
+      vaultBound: !!this.settings.vaultId, pendingCount: this.baseline?.pending().length ?? 0,
+      settings: { ...this.settings }, events: this.diagnostics.snapshot(), recentFailures: this.diagnostics.failureSnapshot(),
+    }, [this.token ?? "", this.settings.password]);
+    const file = await saveDiagnosticReport(this.app.vault, json);
+    new Notice(this.t("settings.diagnostics.saved", { path: file.path }), 10000);
+    try {
+      await this.app.workspace.getLeaf(false).openFile(file);
+    } catch {
+      new Notice(this.t("settings.diagnostics.openHint", { path: file.path }), 10000);
+    }
+    return file.path;
+  }
+
+  clearDiagnosticLogs(): void {
+    this.diagnostics.clear();
+    this.emitRuntimeInfo();
+    new Notice(this.t("settings.diagnostics.cleared"));
+  }
+
   /** 记录运行时信息事件，用于在诊断流中关联插件版本 */
   emitRuntimeInfo(): void {
     this.diagnostics.record({
@@ -473,25 +505,14 @@ export default class OSSPlugin extends Plugin {
     });
   }
 
-  /** 诊断开关切换时记录开关状态并补发运行时信息，便于控制台立即看到变化 */
+  /** 开启诊断后记录当前运行环境。 */
   emitDiagnosticsEnabled(enabled: boolean): void {
     this.diagnostics.record({
       kind: "diagnostics_enabled",
       at: Date.now(),
       enabled,
     });
-    // 立即输出 runtime_info 以便控制台可关联版本
     this.emitRuntimeInfo();
-    // 输出一条测试事件，确保控制台可见
-    this.diagnostics.record({
-      kind: "collab_upload_attempt",
-      at: Date.now(),
-      hasBaseRevision: true,
-      baseRevisionValid: true,
-      hasOperationID: true,
-      operationIDValid: true,
-      operationIDLength: 36,
-    });
   }
 
   /** 用户编辑了存在冲突的文件时提醒，同一路径 3 秒内只提示一次并揭示侧边栏 */

@@ -27,7 +27,7 @@ export interface OSSSettings {
   remotePollIntervalSec: number;
   /** 协作事件仅使用 SSE，连接失败时不回退长轮询*/
   forceSSE: boolean;
-  /** 是否将安全的传输事件写入开发者控制台*/
+  /** 是否记录同步与传输诊断日志*/
   diagnosticsEnabled: boolean;
   /** 用户选择的同步模式偏好，仅在服务端策略为 user_choice 时生效*/
   vaultSyncMode: "short_poll" | "long_poll";

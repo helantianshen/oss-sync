@@ -32,7 +32,7 @@
 后端启动链路为：
 
 1. [main.go](../cmd/server/main.go) 先处理更新 helper 模式和 `--version`，再加载配置与更新状态。
-2. [database.Init](../internal/database/database.go) 建立 SQLite/PostgreSQL 连接，`AutoMigrate` 注册模型并执行兼容回填。
+2. [database.Init](../internal/database/database.go) 建立 SQLite/PostgreSQL 连接；SQLite 默认使用 `_txlock=immediate`，避免设备活动等先读后写事务升级争锁，保留 DSN 中显式指定的锁模式。`AutoMigrate` 注册模型并执行兼容回填。
 3. 启动时执行一次 [reconcile](../internal/reconcile/reconcile.go)，随后加载已启用的服务插件。
 4. [server.Router](../internal/server/server.go) 装配认证、管理、网页、Vault、设备、同步、博客、分享、更新和插件路由。
 5. [cron.Scheduler](../internal/cron/scheduler.go) 注册墓碑、临时文件、孤立文件、历史清理、存储对账及插件任务。

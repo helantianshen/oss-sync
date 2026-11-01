@@ -225,6 +225,20 @@
   border: 0;
 }
 
+.oss-diagnostics-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--size-4-3);
+}
+
+.oss-diagnostics-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+}
+
 .theme-dark .oss-sidebar-mark img,
 .theme-dark .oss-settings-brand img {
   filter: brightness(0) invert(1);

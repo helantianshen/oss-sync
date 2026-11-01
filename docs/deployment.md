@@ -346,6 +346,12 @@ sudo systemctl stop oss-sync-update.path oss-sync &&
 
 全局 `oss` 命令如仍属于旧部署，新安装器会拒绝覆盖。可指定独立 `OSS_GLOBAL_BIN_DIR` 安装，迁移完成后再由管理员调整链接。新的 Release 不再提供旧 Docker 安装器所需的镜像归档和同名脚本，因此不要再用旧一键更新命令。继续使用 Docker 时应手动替换镜像，或先按上述步骤迁移。仓库代码变更本身不会修改正在运行的容器。
 
+## SQLite 并发事务
+
+SQLite 连接默认使用 `_txlock=immediate`，在事务开始时取得写入意向锁，避免设备活动更新等先读后写事务争夺锁升级。驱动原有的 5 秒锁等待保持生效；自定义 DSN 中显式指定 `_txlock` 时保留该选项，现有日志模式与数据文件沿用原配置。事务语义参见 [SQLite 官方说明](https://www.sqlite.org/lang_transaction.html#deferred_immediate_and_exclusive_transactions)。
+
+这项修复在更新服务端程序并重启后生效。其他进程或长期事务持续占用数据库时，仍需检查对应的持锁任务。
+
 ## 不支持架构的源码构建
 
 管理员可以手动下载固定发布标签的源码，按该版本 `go.mod` 的工具链要求构建，并自行验证平台兼容性：

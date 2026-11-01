@@ -1,6 +1,5 @@
 import { ConfirmModal } from "./confirm-modal";
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import type { ButtonComponent } from "obsidian";
+import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from "obsidian";
 import type OSSPlugin from "./main";
 import type { OSSSettings } from "./settings";
 import { validateLoginCredentials, validateServerURL } from "./login-state";
@@ -391,7 +390,8 @@ export class OSSSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    const diagnosticsSetting = new Setting(containerEl)
+      .setClass("oss-diagnostics-setting")
       .setName(this.plugin.t("settings.sync.diagnostics"))
       .setDesc(this.plugin.t("settings.sync.diagnosticsDesc"))
       .addToggle((toggle) =>
@@ -403,6 +403,23 @@ export class OSSSettingTab extends PluginSettingTab {
             this.plugin.emitDiagnosticsEnabled(value);
           })
       );
+
+    const diagnosticActions = diagnosticsSetting.settingEl.createDiv({ cls: "oss-diagnostics-actions" });
+    const exportButton = new ButtonComponent(diagnosticActions)
+      .setButtonText(this.plugin.t("settings.diagnostics.exportButton"))
+      .onClick(async () => {
+        exportButton.setDisabled(true);
+        try {
+          await this.plugin.exportDiagnosticLogs();
+        } catch (error) {
+          new Notice(this.plugin.t("settings.diagnostics.failed", { error: this.plugin.localizedError(error) }), 10000);
+        } finally {
+          exportButton.setDisabled(false);
+        }
+      });
+    new ButtonComponent(diagnosticActions)
+      .setButtonText(this.plugin.t("settings.diagnostics.clear"))
+      .onClick(() => this.plugin.clearDiagnosticLogs());
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.sync.conflictEditWarning"))

@@ -12,6 +12,7 @@ import {
 import { shouldSync, classifySyncPath } from "./blacklist.js";
 import type { ConflictResolution } from "./conflict-modal.js";
 import type { Diagnostics } from "./diagnostics.js";
+import { diagnosticErrorDetails } from "./diagnostic-report";
 import { localizeError } from "./localized-error.js";
 import type OSSPlugin from "./main.js";
 import { NoticeGuard } from "./notice-guard.js";
@@ -512,6 +513,7 @@ export class SyncEngine {
         forceFull,
         cursor: this.baseline.getCursor(),
       });
+      this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "sync_run", stage: "failed", details: diagnosticErrorDetails(error) });
       const message = this.localizedError(error);
       this.plugin.setSyncState("error", message);
       // 轮询与手动同步共用该路径，冷却期内重复失败只提示一次，状态栏持续展示
@@ -905,6 +907,7 @@ export class SyncEngine {
         default: return assertNeverOrdinarySyncAction(action);
       }
     } catch (error: unknown) {
+      this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "sync_action", stage: "failed", details: { action: action.kind, path: action.path, ...diagnosticErrorDetails(error) } });
       return this.handleActionFailure(vaultID, action, error);
     }
   }
@@ -976,6 +979,7 @@ export class SyncEngine {
       return this.conflictOutcome(remote.path, await this.ordinaryFileAccess.readExact(remote.path), error.current);
     }
     const bytes = new Uint8Array(downloaded.content).slice();
+    this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "write_started", details: { path: remote.path, bytes: bytes.byteLength, expectedBytes: remote.size, revision: remote.revision, localState: expected.kind } });
     const write = expected.kind === "absent"
       ? await this.ordinaryFileAccess.create(remote.path, expected, bytes)
       : await this.ordinaryFileAccess.replace(remote.path, expected, bytes);
@@ -984,6 +988,7 @@ export class SyncEngine {
       return { kind: "conflicted" };
     }
     const snapshot = write.snapshot;
+    this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "written", details: { path: remote.path, bytes: bytes.byteLength, revision: downloaded.meta.revision } });
     this.baseline.set(remote.path, await this.liveAcknowledgement({
       path: remote.path,
       server: downloaded.meta,

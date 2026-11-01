@@ -1,7 +1,11 @@
+import { DIAGNOSTIC_FOLDER } from "./diagnostic-report";
+
 // 不应进入同步队列的本地文件
 //
 // 基线、版本控制目录、系统临时文件和 Obsidian 设备本地状态始终忽略
 const ABSOLUTE_BLACKLIST: BlacklistEntry[] = [
+  { kind: "exact", value: DIAGNOSTIC_FOLDER },
+  { kind: "prefix", value: DIAGNOSTIC_FOLDER + "/" },
   { kind: "exact", value: ".oss-sync-state.json" },
   { kind: "exact", value: ".DS_Store" },
   { kind: "exact", value: "Thumbs.db" },

@@ -4,8 +4,10 @@ package database
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -32,8 +34,12 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 }
 
 func initSQLite(cfg *config.Config) (*gorm.DB, error) {
-	dsn := cfg.Database.DSN
-	if dir := filepath.Dir(dsn); dir != "" && dir != "." {
+	dsn, err := sqliteConnectionString(cfg.Database.DSN)
+	if err != nil {
+		return nil, err
+	}
+	filePath, _, _ := strings.Cut(cfg.Database.DSN, "?")
+	if dir := filepath.Dir(filePath); !strings.HasPrefix(filePath, "file:") && dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("创建 SQLite 目录 %s 失败: %w", dir, err)
 		}
@@ -50,6 +56,24 @@ func initSQLite(cfg *config.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("打开 SQLite 失败: %w", err)
 	}
 	return db, nil
+}
+
+// SQLite 的延迟事务先读后写时可能立即争锁失败，busy_timeout 不能消除这类升级死锁。
+// 默认在事务开始时取得写意向锁；驱动已有的锁等待由此可以正常生效。
+func sqliteConnectionString(dsn string) (string, error) {
+	_, query, hasQuery := strings.Cut(dsn, "?")
+	options, err := url.ParseQuery(query)
+	if err != nil {
+		return "", fmt.Errorf("SQLite 连接参数无效: %w", err)
+	}
+	if options.Has("_txlock") {
+		return dsn, nil
+	}
+	separator := "?"
+	if hasQuery {
+		separator = "&"
+	}
+	return dsn + separator + "_txlock=immediate", nil
 }
 
 func initPostgres(cfg *config.Config) (*gorm.DB, error) {

@@ -6,6 +6,32 @@
 // 该失败只出现在 Obsidian 进程内，外部无法复现，因此以降级方式规避。
 
 import { Platform, requestUrl } from "obsidian";
+import { diagnosticRoute, diagnosticErrorDetails, type DiagnosticDetails } from "./diagnostic-report";
+
+type TransportDiagnosticSink = (stage: string, details: DiagnosticDetails) => void;
+let transportDiagnosticSink: TransportDiagnosticSink | null = null;
+const diagnosticRequestIDs = new WeakMap<HttpRequest, number>();
+let diagnosticRequestSequence = 0;
+
+export function setTransportDiagnosticSink(sink: TransportDiagnosticSink | null): void {
+  transportDiagnosticSink = sink;
+}
+
+function trace(request: HttpRequest, stage: string, details: DiagnosticDetails = {}): void {
+  try {
+    const url = new URL(request.url);
+    transportDiagnosticSink?.(stage, { requestId: diagnosticRequestIDs.get(request),
+      route: diagnosticRoute(request.url), path: url.searchParams.get("path") ?? undefined,
+      method: request.method, driver: "requestUrl", ...details });
+  } catch { /* 日志观察者的失败不改变请求结果。 */ }
+}
+
+function responseDetails(response: { status: number; arrayBuffer: ArrayBuffer; headers: Record<string, string> }): DiagnosticDetails {
+  const headers = Object.fromEntries(Object.entries(response.headers).map(([key, value]) => [key.toLowerCase(), value]));
+  return { status: response.status, bytes: response.arrayBuffer.byteLength,
+    contentType: headers["content-type"], contentLength: headers["content-length"],
+    hasHash: !!headers["x-oss-hash"], responseRevision: headers["x-oss-revision"] };
+}
 
 /** 请求描述；body 为字符串或二进制 */
 export interface HttpRequest {
@@ -40,6 +66,13 @@ function isRetryableJsonFailure(error: unknown, method: string): boolean {
   return method === "GET";
 }
 
+/** 文件响应不一定是 JSON；本地解析失败时保留原始字节和文本。 */
+function parseJSONBody(text: string): unknown {
+  const body = text.trim();
+  if (!body) return null;
+  try { return JSON.parse(body); } catch { return null; }
+}
+
 async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
   try {
     const res = await requestUrl({
@@ -49,10 +82,12 @@ async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
       body: request.body,
       throw: false,
     });
+    trace(request, "response_received", responseDetails(res));
+    const text = res.text;
     const response: HttpResponse = {
       status: res.status,
-      json: res.json,
-      text: res.text,
+      json: parseJSONBody(text),
+      text,
       arrayBuffer: res.arrayBuffer,
       headers: res.headers,
     };
@@ -60,6 +95,7 @@ async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
     return response;
   } catch (error) {
     if (!Platform.isDesktop || !isRetryableJsonFailure(error, request.method)) throw error;
+    trace(request, "fallback", { driver: "node", ...diagnosticErrorDetails(error) });
     return viaNodeHttps(request);
   }
 }
@@ -108,12 +144,7 @@ async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
     );
 
     const text = raw.body.toString("utf-8");
-    let json: unknown = null;
-    try {
-      json = text.length > 0 ? JSON.parse(text) : null;
-    } catch {
-      json = null;
-    }
+    const json = parseJSONBody(text);
     const arrayBuffer = raw.body.buffer.slice(
       raw.body.byteOffset,
       raw.body.byteOffset + raw.body.byteLength
@@ -123,6 +154,7 @@ async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
       if (typeof value === "string") headers[key] = value;
     }
     const response: HttpResponse = { status: raw.status, json, text, arrayBuffer, headers };
+    trace(request, "response_received", { ...responseDetails(response), driver: "node" });
     reportNonJson(request.url, response.status, text);
     return response;
   }
@@ -131,10 +163,15 @@ async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
 
 /** 发送请求；Chromium 网络栈重定向循环时自动降级到原生 https */
 export async function httpRequest(request: HttpRequest): Promise<HttpResponse> {
+  const startedAt = Date.now();
+  diagnosticRequestIDs.set(request, ++diagnosticRequestSequence);
+  trace(request, "request_started");
   try {
     return await viaRequestUrl(request);
   } catch (error) {
+    trace(request, "request_failed", { durationMs: Date.now() - startedAt, ...diagnosticErrorDetails(error) });
     if (!Platform.isDesktop || !isRedirectLoop(error)) throw error;
+    trace(request, "fallback", { driver: "node" });
     return viaNodeHttps(request);
   }
 }

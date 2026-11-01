@@ -7,7 +7,8 @@ import { classifySyncPath } from "./blacklist.js";
 import type { Diagnostics } from "./diagnostics";
 import type { OSSSettings } from "./settings";
 import { isValidOperationID, isValidServerRevision } from "./operation-id.js";
-import { httpRequest } from "./http-transport.js";
+import { httpRequest, type HttpResponse } from "./http-transport.js";
+import { diagnosticErrorDetails } from "./diagnostic-report";
 
 /** 登录响应；device_status 为 pending 时令牌可用但需等待授权 */
 export interface AuthResponse {
@@ -544,16 +545,28 @@ export class OSSApiClient {
     let status: number | undefined;
     let bytes: number | undefined;
     const query = new URLSearchParams({ path, revision: String(revision) });
+    this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "started", details: { path, revision } });
     try {
-      const res = await httpRequest({
-        url: this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync/download?${query.toString()}`),
-        method: "GET",
-        headers: this.authHeaders(),
-      });
-      status = res.status;
-      if (res.status >= 400) {
-        await this.parseResponse<never>(res.status, res.json, res.text);
-      }
+      const requestDownload = async (attempt = 0): Promise<HttpResponse> => {
+        status = undefined;
+        try {
+          const response = await httpRequest({
+            url: this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync/download?${query.toString()}`),
+            method: "GET", headers: this.authHeaders(),
+          });
+          status = response.status;
+          if (response.status >= 400) await this.parseResponse<never>(response.status, response.json, response.text);
+          return response;
+        } catch (error) {
+          // 仅为同一 revision 的幂等下载缓解明确的 SQLite 短暂锁冲突。
+          if (!(error instanceof OSSApiError) || error.status !== 500 || !/SQLITE_BUSY|database is locked/i.test(error.message) || attempt >= 2) throw error;
+          const delayMs = attempt === 0 ? 250 : 750;
+          this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "database_busy_retry", details: { path, revision, attempt: attempt + 1, delayMs, status: error.status } });
+          await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+          return requestDownload(attempt + 1);
+        }
+      };
+      const res = await requestDownload();
       bytes = res.arrayBuffer.byteLength;
       return {
         content: res.arrayBuffer,
@@ -567,6 +580,9 @@ export class OSSApiClient {
           deleted: false,
         },
       };
+    } catch (error) {
+      this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "failed", details: { path, revision, ...diagnosticErrorDetails(error), ...(status === undefined ? {} : { status }) } });
+      throw error;
     } finally {
       this.recordDirectAPI("GET", status, startedAt);
       this.diagnostics?.record({
