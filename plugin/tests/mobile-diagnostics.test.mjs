@@ -55,7 +55,7 @@ test("mobile file downloads skip the native JSON getter and preserve every byte"
   assert.doesNotMatch(JSON.stringify(diagnostics.snapshot()), /PRIVATE-NOTE-BODY/);
 });
 
-test("the plugin export works without console logging and retains the saved file if opening fails", async (t) => {
+test("the plugin export uses Obsidian Platform flags and retains the saved file if opening fails", async (t) => {
   const m = await load(t);
   const files = new Map();
   const diagnostics = new m.Diagnostics();
@@ -67,9 +67,26 @@ test("the plugin export works without console logging and retains the saved file
     emitRuntimeInfo: () => diagnostics.record({ kind: "runtime_info", at: 1, pluginVersion: "0.3.1", diagnosticsEnabled: false }),
     app: { vault: { getAbstractFileByPath: (path) => files.get(path), createFolder: async (path) => files.set(path, {}), create: async (path, content) => { const file = { path, content }; files.set(path, file); return file; } }, workspace: { getLeaf: () => ({ openFile: async () => { throw new Error("viewer unavailable"); } }) } },
   };
-  const path = await m.OSSPlugin.prototype.exportDiagnosticLogs.call(plugin);
-  assert.ok(files.get(path).content.includes('"pluginID": "oss-sync"'));
-  assert.doesNotMatch(files.get(path).content, /PRIVATE-TOKEN|PRIVATE-PASSWORD/);
+  const platforms = [
+    [{ isMobile: true, isAndroidApp: true }, "mobile", "android"],
+    [{ isMobile: true, isIosApp: true, isMacOS: true }, "mobile", "ios"],
+    [{ isWin: true }, "desktop", "windows"],
+    [{ isMacOS: true }, "desktop", "macos"],
+    [{ isLinux: true }, "desktop", "linux"],
+    [{ isMobile: true, isWin: true }, "mobile", "windows"],
+    [{}, "desktop", "unknown"],
+  ];
+  for (const [flags, platform, operatingSystem] of platforms) {
+    Object.assign(m.Platform, { isMobile: false, isAndroidApp: false, isIosApp: false, isWin: false, isMacOS: false, isLinux: false }, flags);
+    const path = await m.OSSPlugin.prototype.exportDiagnosticLogs.call(plugin);
+    const content = files.get(path).content;
+    const report = JSON.parse(content.split("```json\n")[1].split("\n```")[0]);
+    assert.equal(report.pluginID, "oss-sync");
+    assert.equal(report.runtime.platform, platform);
+    assert.equal(report.runtime.operatingSystem, operatingSystem);
+    assert.equal(Object.hasOwn(report.runtime, "userAgent"), false);
+    assert.doesNotMatch(content, /PRIVATE-TOKEN|PRIVATE-PASSWORD/);
+  }
   assert.ok(m.host.notices.some((message) => message.includes("settings.diagnostics.saved")));
   assert.ok(m.host.notices.some((message) => message.includes("settings.diagnostics.openHint")));
 });
@@ -197,12 +214,12 @@ test("export redacts secrets, filters settings and survives an overflowing event
   const d = new m.Diagnostics(undefined, 2);
   d.record({ kind: "detail", at: 1, area: "sync_action", stage: "failed", details: { path: "notes/a.md", errorMessage: 'TOKEN-LITERAL password="PASSWORD-LITERAL" Bearer abcdef https://user:URL-PASSWORD@example.com/api?token=QUERY-SECRET#private', body: "PRIVATE-BODY" } });
   for (let at = 2; at < 5; at++) d.record({ kind: "api", at, method: "GET", durationMs: 1 });
-  const report = JSON.parse(m.createDiagnosticReport({ pluginVersion: "0.3.1", obsidianVersion: "1.14.5", platform: "mobile", userAgent: "Android", serverURL: "https://user:URL-PASSWORD@example.com/api?password=QUERY-SECRET", loggedIn: true, vaultBound: true, pendingCount: 2, settings: { maxConcurrency: 6, password: "PASSWORD-LITERAL", token: "TOKEN-LITERAL", username: "PRIVATE-USER" }, events: d.snapshot(), recentFailures: d.failureSnapshot() }, ["TOKEN-LITERAL", "PASSWORD-LITERAL"]));
+  const report = JSON.parse(m.createDiagnosticReport({ pluginVersion: "0.3.1", obsidianVersion: "1.14.5", platform: "mobile", operatingSystem: "android", userAgent: "PRIVATE-UA", serverURL: "https://user:URL-PASSWORD@example.com/api?password=QUERY-SECRET", loggedIn: true, vaultBound: true, pendingCount: 2, settings: { maxConcurrency: 6, password: "PASSWORD-LITERAL", token: "TOKEN-LITERAL", username: "PRIVATE-USER" }, events: d.snapshot(), recentFailures: d.failureSnapshot() }, ["TOKEN-LITERAL", "PASSWORD-LITERAL"]));
   assert.equal(report.events.length, 2);
   assert.equal(report.recentFailures.length, 1);
   assert.equal(report.settings.maxConcurrency, 6);
   assert.equal(report.runtime.platform, "mobile");
-  assert.doesNotMatch(JSON.stringify(report), /TOKEN-LITERAL|PASSWORD-LITERAL|URL-PASSWORD|QUERY-SECRET|PRIVATE-BODY|PRIVATE-USER|abcdef/);
+  assert.doesNotMatch(JSON.stringify(report), /TOKEN-LITERAL|PASSWORD-LITERAL|URL-PASSWORD|QUERY-SECRET|PRIVATE-BODY|PRIVATE-USER|PRIVATE-UA|abcdef/);
   assert.equal(report.recentFailures[0].details.path, "notes/a.md");
   d.clear();
   assert.equal(d.failureSnapshot().length, 0);

@@ -62,7 +62,7 @@ interface ReportInput {
   pluginVersion: string;
   obsidianVersion: string;
   platform: string;
-  userAgent: string;
+  operatingSystem: string;
   serverURL: string;
   loggedIn: boolean;
   vaultBound: boolean;
@@ -87,7 +87,7 @@ export function createDiagnosticReport(input: ReportInput, secrets: readonly str
     privacy: "Local export only. Includes relative file paths, server address and device runtime. No request/response bodies, credentials or authorization headers. Logs reset when the plugin restarts.",
     runtime: {
       pluginVersion: input.pluginVersion, obsidianVersion: input.obsidianVersion,
-      platform: input.platform, userAgent: input.userAgent.slice(0, 600),
+      platform: input.platform, operatingSystem: input.operatingSystem,
       serverURL: redactDiagnosticText(input.serverURL), loggedIn: input.loggedIn,
       vaultBound: input.vaultBound, pendingCount: input.pendingCount,
     },

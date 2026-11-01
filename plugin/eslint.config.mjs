@@ -21,5 +21,6 @@ export default [{
     "obsidianmd/prefer-create-el": "error",
     "obsidianmd/prefer-window-timers": "error",
     "obsidianmd/no-nodejs-modules": "error",
+    "obsidianmd/platform": "error",
   },
 }];

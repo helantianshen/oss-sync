@@ -474,7 +474,11 @@ export default class OSSPlugin extends Plugin {
     const json = createDiagnosticReport({
       pluginVersion: this.manifest.version, obsidianVersion: apiVersion,
       platform: Platform.isMobile ? "mobile" : "desktop",
-      userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+      operatingSystem: Platform.isAndroidApp ? "android"
+        : Platform.isIosApp ? "ios"
+        : Platform.isWin ? "windows"
+        : Platform.isMacOS ? "macos"
+        : Platform.isLinux ? "linux" : "unknown",
       serverURL: this.settings.serverUrl, loggedIn: this.api.hasToken(),
       vaultBound: !!this.settings.vaultId, pendingCount: this.baseline?.pending().length ?? 0,
       settings: { ...this.settings }, events: this.diagnostics.snapshot(), recentFailures: this.diagnostics.failureSnapshot(),
