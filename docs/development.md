@@ -8,7 +8,7 @@
 | --- | --- |
 | 服务端 | Go 1.25.0 或兼容的更新版本，以根目录 `go.mod` 为准；CI 使用 `go-version-file: go.mod`。 |
 | Obsidian 客户端开发 | Node.js 与 npm，推荐 Node 24 LTS。锁定的 ESLint 10.13.0 要求 `^20.19.0 \|\| ^22.13.0 \|\| >=24`，并非任意 Node 20+；`plugin/package.json` 当前未声明 `engines`。 |
-| 客户端运行宿主 | Obsidian 1.4.0+；`manifest.json` 的 `isDesktopOnly: false` 表示支持移动端。开发机的 Node 要求不等于用户运行 Obsidian 时需要另装 Node。 |
+| 客户端运行宿主 | 开发中的 0.3.4 要求 Obsidian 1.8.7+，与 `getLanguage()` 等实际调用的 API 对齐；以 `plugin/manifest.json` 为准。`isDesktopOnly: false` 表示支持移动端。开发机的 Node 要求不等于用户运行 Obsidian 时需要另装 Node。 |
 | 打包工具 | `scripts/package-release.py` 和 Shirone 示例使用 Python 3 标准库；完整 Release 工作流使用 Ubuntu runner 提供的工具。容器相关操作另需 Docker/Compose。 |
 
 当前 CI 和 Release 工作流仍配置 `node-version: 20`，没有写明补丁下限。Node 20 系列中须至少为 20.19.0；Node 21、23 也不在 ESLint 的支持范围内。旧的「Node 20」徽章不足以表达这些限制。依赖版本以 `plugin/package-lock.json` 为准，使用 `npm ci`，不要凭 `@types/node` 版本推断工具链下限。

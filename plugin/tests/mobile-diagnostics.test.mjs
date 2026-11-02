@@ -11,7 +11,7 @@ async function load(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const outfile = join(dir, "test.mjs");
   await build({
-    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
     outfile, bundle: true, platform: "node", format: "esm",
     plugins: [{ name: "mobile-host", setup(builder) {
       builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "host" }));
@@ -240,4 +240,55 @@ test("export saves a readable Markdown file locally without overwriting or enter
   assert.equal(m.shouldSync("notes/a.md", ".obsidian"), true);
   assert.equal(m.shouldSync(m.DIAGNOSTIC_FOLDER + "-notes/a.md", ".obsidian"), true);
   await assert.rejects(m.saveDiagnosticReport({ ...vault, create: async () => { throw new Error("disk full"); } }, "{}"), /disk full/);
+});
+
+
+test("侧边栏关闭或重开后只访问工作区内的视图", async (t) => {
+  const m = await load(t);
+  let leaves = [];
+  const plugin = { app: { workspace: { getLeavesOfType: () => leaves } } };
+  const getView = Object.getOwnPropertyDescriptor(m.OSSPlugin.prototype, "sidebarView").get;
+  const first = Object.create(m.SidebarView.prototype);
+  const reopened = Object.create(m.SidebarView.prototype);
+  assert.equal(getView.call(plugin), undefined);
+  leaves = [{ view: first }];
+  assert.equal(getView.call(plugin), first);
+  leaves = [];
+  assert.equal(getView.call(plugin), undefined);
+  leaves = [{ view: {} }, { view: reopened }];
+  assert.equal(getView.call(plugin), reopened);
+});
+
+test("卸载立即停止所有任务，保存尚未完成或失败都不阻止清理", async (t) => {
+  const m = await load(t);
+  const calls = [];
+  const errors = [];
+  t.mock.method(console, "error", (...args) => errors.push(args));
+  const previousWindow = globalThis.window;
+  globalThis.window = { clearInterval: (id) => calls.push(["clearInterval", id]) };
+  t.after(() => {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  });
+  let rejectSave;
+  const saving = new Promise((_, reject) => { rejectSave = reject; });
+  const plugin = {
+    loaded: true, pluginVersionCheckTimer: 42,
+    syncEngine: {
+      stop: () => calls.push("sync stopped"),
+      flushPendingQueue: () => { calls.push("flush"); return saving; },
+    },
+    collabManager: { stop: () => calls.push("collaboration stopped") },
+    serverUpdatePoller: { dispose: () => calls.push("updates stopped") },
+  };
+  assert.equal(m.OSSPlugin.prototype.onunload.call(plugin), undefined);
+  assert.deepEqual(calls, [["clearInterval", 42], "sync stopped", "collaboration stopped", "updates stopped", "flush"]);
+  assert.equal(plugin.loaded, false);
+  assert.equal(plugin.pluginVersionCheckTimer, null);
+  assert.equal(plugin.serverUpdatePoller, null);
+  const error = new Error("save failed");
+  rejectSave(error);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0][1], error);
 });

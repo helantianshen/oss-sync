@@ -77,7 +77,6 @@ export default class OSSPlugin extends Plugin {
   baseline!: BaselineStore;
   syncEngine!: SyncEngine;
   collabManager!: CollabManager;
-  sidebarView?: SidebarView;
 
   /** 诊断事件输出，开启后写入控制台，协作类关键失败额外用 warn 级别确保可见 */
   private readonly diagnostics = new Diagnostics((event) => {
@@ -142,10 +141,7 @@ export default class OSSPlugin extends Plugin {
       this.diagnostics
     );
 
-    this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => {
-      this.sidebarView = new SidebarView(leaf, this);
-      return this.sidebarView;
-    });
+    this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new SidebarView(leaf, this));
     this.ribbonEl = this.addRibbonIcon("refresh-cw", this.t("ribbon.openSidebar"), () => {
       void this.activateSidebar();
     });
@@ -308,18 +304,28 @@ export default class OSSPlugin extends Plugin {
     });
   }
 
-  /** 插件卸载：落盘待办队列并停止同步、协作与服务端更新轮询，卸载期间的 saveData 可能被丢弃 */
-  async onunload(): Promise<void> {
+  /** 宿主不会等待异步卸载，所有轮询必须同步停止；已入队保存继续完成并记录失败 */
+  onunload(): void {
     this.loaded = false;
     if (this.pluginVersionCheckTimer !== null) window.clearInterval(this.pluginVersionCheckTimer);
     this.pluginVersionCheckTimer = null;
     setNonJsonSink(null);
     setTransportDiagnosticSink(null);
-    await this.syncEngine?.flushPendingQueue();
     this.syncEngine?.stop();
     this.collabManager?.stop();
     this.serverUpdatePoller?.dispose();
     this.serverUpdatePoller = null;
+    void this.syncEngine?.flushPendingQueue().catch((error: unknown) => {
+      console.error("[oss-sync] Failed to flush pending queue during unload", error);
+    });
+  }
+
+  /** 从工作区获取仍打开的侧边栏，避免持有已关闭视图及其 DOM */
+  get sidebarView(): SidebarView | undefined {
+    for (const leaf of this.app.workspace.getLeavesOfType(SIDEBAR_VIEW_TYPE)) {
+      if (leaf.view instanceof SidebarView) return leaf.view;
+    }
+    return undefined;
   }
 
 
