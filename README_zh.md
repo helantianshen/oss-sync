@@ -35,9 +35,23 @@ Obsidian 端配合 **OSS Sync and Share** 社区插件使用。服务端控制�
 
 支持 Linux amd64/arm64，要求 root、运行中的 systemd，以及 Python 3、curl、coreutils、`flock`、`useradd`/`getent`。脚本仅检查依赖，不安装工具链或 Docker。
 
+任选一条命令下载安装脚本。
+
+**GitHub 官方直连**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/helantianshen/oss-sync/main/oss.sh -o oss.sh
+```
+
+**加速下载**
+
 ```bash
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/helantianshen/oss-sync/main/oss.sh -o oss.sh
-# 执行前先审阅下载的脚本
+```
+
+审阅下载的脚本后再执行。
+
+```bash
 sudo bash oss.sh
 ```
 
