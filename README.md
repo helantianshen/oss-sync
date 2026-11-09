@@ -36,7 +36,7 @@ Use **OSS Sync and Share** from the Obsidian community plugin marketplace. The G
 Supports Linux amd64/arm64. Requires root, running systemd, Python 3, curl, coreutils, `flock`, and `useradd`/`getent`. The installer checks dependencies; it does not install toolchains or Docker.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/helantianshen/oss-sync/main/oss.sh -o oss.sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/helantianshen/oss-sync/main/oss.sh -o oss.sh
 # Review the downloaded script before executing it
 sudo bash oss.sh
 ```
