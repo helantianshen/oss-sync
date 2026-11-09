@@ -1,10 +1,9 @@
 {
   "id": "oss-sync",
   "name": "OSS Sync and Share",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minAppVersion": "1.8.7",
   "description": "Self-hosted sync and share: Markdown + attachments + vault config, LWW-based multi-device sync, lightweight blog publishing, and collaboration editing.",
   "author": "OSS Project",
-  "authorUrl": "https://github.com/helantianshen",
   "isDesktopOnly": false
 }
