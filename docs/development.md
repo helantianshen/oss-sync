@@ -102,12 +102,12 @@ npm run build               # 生产压缩构建，不带 source map
 
 ## 发布与版本元数据
 
-[Release 工作流](../.github/workflows/release.yml)由标签推送触发，接受带可选 `v` 前缀的 `X.Y.Z` 或 `X.Y.Z-rc.N`。提交必须属于远端 `main` 历史；工作流执行统一版本检查，并要求标签版本与客户端构建版本一致。预发布使用 GitHub prerelease，容器不更新 `latest` 标签。构建服务端资产前执行 `go test -race ./...`。
+[Release 工作流](../.github/workflows/release.yml)由标签推送触发，接受带可选 `v` 前缀的 `X.Y.Z` 或 `X.Y.Z-rc.N`。正式标签可以指向远端 `main` 历史中的提交，也可以指向其上仅同步根清单的单父提交。预发布标签必须属于远端 `main` 历史。预发布使用 GitHub prerelease，容器不更新 `latest` 标签。构建服务端资产前执行 `go test -race ./...`。
 
 | 元数据 | 当前职责与维护边界 |
 | --- | --- |
 | 根 `manifest.json` | 仓库级 Obsidian 插件清单，也是客户端市场更新提醒实际请求的文件；维护插件 ID、当前版本、最低宿主版本等。 |
-| `plugin/manifest.json` | 本地安装及 Release 三文件中的清单。应与根清单保持一致；当前两处均为 0.3.1，ID 均为 `oss-sync`。 |
+| `plugin/manifest.json` | 本地安装及 Release 三文件中的清单。正式标签内须与根清单完全一致，ID 为 `oss-sync`。 |
 | `plugin/package.json` / `package-lock.json` | npm 工具链与依赖锁定；发布时一起维护包版本。npm 包名不决定 Obsidian 插件 ID。 |
 | 根 `versions.json` | 插件版本到最低 Obsidian 版本的兼容映射，供社区插件版本选择使用；不是服务端或客户端自动更新任务状态。 |
 | `plugin/versions.json` | 根兼容映射的完整副本；两者必须一致，由 `scripts/check-versions.py` 在 CI 和 Release 中检查。 |
@@ -117,10 +117,12 @@ npm run build               # 生产压缩构建，不带 source map
 
 ```sh
 python3 scripts/check-versions.py
-python3 scripts/check-versions.py --release v0.3.1
+python3 scripts/check-versions.py --release 0.3.4
 ```
 
 统一检查覆盖客户端清单、npm 包和锁文件的版本一致性、两份兼容表的一致性，以及正式版本的 `minAppVersion` 映射。CI 和 Release 都会执行；它只检查，不自动修改文件。发布前需要同时维护这些文件，不能只修改 `package.json`。根清单直接参与市场更新提醒，允许在发布准备时保留上一正式版，但其版本和最低宿主版本必须已有兼容映射；不能提前公告尚不可获取的市场版本。RC 构建不要求写入正式市场兼容表。
+
+正式发布先将代码和插件版本元数据提交到 `main` 并通过 CI，此时公开根清单仍指向上一个可下载的版本。在该提交上创建发布提交，仅把 `plugin/manifest.json` 复制到根目录并提交。运行带 `--release` 的检查后，创建同版本标签并单独推送标签。该检查会比较标签内两份清单的完整内容。确认 Release 附件与来源证明后，再把发布提交合入 `main`。若 `main` 在构建期间前进，保留新的上游提交并合并该根清单变更。
 
 工作流生成的交付物：
 

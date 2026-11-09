@@ -11,6 +11,10 @@
     initCollaborationSelection();
     initThemeSettingGroups();
     initPublicBlogThemeCapability();
+    document.querySelectorAll('.markdown-preview li > input[type="checkbox"]').forEach(function (checkbox) {
+      checkbox.parentElement.classList.add("task-list-item");
+      checkbox.parentElement.classList.toggle("is-checked", checkbox.checked);
+    });
     initPluginUploadProgress();
     initPageSizeForms();
     initShareVisibility();
@@ -95,6 +99,7 @@
       var option = themeSelect.options[themeSelect.selectedIndex];
       var supported = option && option.dataset.supportsPublicBlog === "true";
       checkbox.disabled = !supported;
+      control.classList.toggle("is-disabled", !supported);
       control.title = supported ? "" : (control.dataset.unsupportedTitle || "");
       if (!supported) checkbox.checked = false;
     }

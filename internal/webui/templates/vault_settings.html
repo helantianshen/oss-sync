@@ -33,7 +33,7 @@
         <input type="number" name="recycle_bin_days" min="0" max="3650" value="{{.Data.RecycleBinDays}}">
         <small>{{.Layout.T "vault.recycle_bin_days_hint" .Data.DefaultRecycleDays}}</small>
       </label>
-       <label class="switch-control" data-public-blog-control data-unsupported-title="{{.Layout.T "vault.public_blog_unsupported"}}" {{if not .Data.ThemeSupportsPublicBlog}}title="{{.Layout.T "vault.public_blog_unsupported"}}"{{end}}>
+       <label class="switch-control{{if not .Data.ThemeSupportsPublicBlog}} is-disabled{{end}}" data-public-blog-control data-unsupported-title="{{.Layout.T "vault.public_blog_unsupported"}}" {{if not .Data.ThemeSupportsPublicBlog}}title="{{.Layout.T "vault.public_blog_unsupported"}}"{{end}}>
          <input type="checkbox" name="is_public_blog" {{if .Data.IsPublicBlog}}checked{{end}} {{if not .Data.ThemeSupportsPublicBlog}}disabled{{end}}>
         <span class="switch-control__track" aria-hidden="true"></span>
         <span>{{.Layout.T "vault.public_blog"}}</span>

@@ -1,180 +1,203 @@
 import { ConfirmModal } from "./confirm-modal";
-import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, ButtonComponent, Notice, PluginSettingTab, requireApiVersion, Setting } from "obsidian";
+import type { SettingDefinitionEmpty, SettingDefinitionGroup, SettingDefinitionRender } from "obsidian";
 import type OSSPlugin from "./main";
 import type { OSSSettings } from "./settings";
 import { validateLoginCredentials, validateServerURL } from "./login-state";
 import { OSS_LOGO_DATA_URL } from "./brand";
-import { renderShareGuideEntry } from "./share-guide-modal";
+import { addShareGuideButton } from "./share-guide-modal";
+
+type RenderSetting = (setting: Setting) => void | (() => void);
+type SettingRow = (Omit<SettingDefinitionRender, "render"> & { render: RenderSetting }) | SettingDefinitionEmpty;
+type SettingsSection = SettingDefinitionGroup & { items: SettingRow[] };
 
 /** 插件设置页：按语言、服务端、仓库、设备、同步与更新分组渲染表单，并维护仓库下拉的定时刷新 */
 export class OSSSettingTab extends PluginSettingTab {
-  /** 仓库下拉的轮询句柄，离开设置页或重新渲染时必须清理，否则计时器叠加 */
-  private vaultRefreshTimer: number | null = null;
+  private cancelVaultRefresh: (() => void) | null = null;
 
   /** 构造设置页，app 由基类持有，plugin 提供设置读写与业务操作入口 */
   constructor(app: App, private plugin: OSSPlugin) {
     super(app, plugin);
   }
 
-  /** 重建整个设置页；未设置设备名时只渲染初始化分区并提前返回 */
-  display(): void {
-    this.stopVaultRefresh();
-    const { containerEl } = this;
-    containerEl.empty();
+  /** Obsidian 1.13+ 在注册时索引这些定义，控件和请求只在渲染时创建。 */
+  getSettingDefinitions(): SettingsSection[] {
+    let items: SettingRow[] = [];
+    const sections: SettingsSection[] = [{ type: "group", items }];
+    const heading = (name: string): void => {
+      items = [];
+      sections.push({ type: "group", heading: name, items });
+    };
+    const row = (
+      name: string,
+      desc?: string,
+      render?: RenderSetting,
+    ): void => {
+      items.push(render ? { name, desc, render } : { name, desc });
+    };
 
-    const brand = containerEl.createDiv({ cls: "oss-settings-brand" });
-    brand.createEl("img", { attr: { src: OSS_LOGO_DATA_URL, alt: "", width: "72", height: "28" } });
-    new Setting(brand).setName("OSS Sync").setHeading();
+    items.push({
+      name: "OSS Sync",
+      searchable: false,
+      render: (setting) => {
+        const brand = this.createSettingsBlock(setting).createDiv({ cls: "oss-settings-brand" });
+        brand.createEl("img", { attr: { src: OSS_LOGO_DATA_URL, alt: "", width: "72", height: "28" } });
+        new Setting(brand).setName("OSS Sync").setHeading();
+      },
+    });
 
     // 语言与服务端分区：界面语言、服务端地址与登录态，登录前后渲染不同表单
 
-    new Setting(containerEl).setName(this.plugin.t("settings.language.title")).setHeading();
+    heading(this.plugin.t("settings.language.title"));
 
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.language.name"))
-      .setDesc(this.plugin.t("settings.language.desc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("auto", this.plugin.t("settings.language.auto"))
-          .addOption("zh", this.plugin.t("settings.language.zh"))
-          .addOption("en", this.plugin.t("settings.language.en"))
-          .setValue(this.plugin.settings.language)
-          .onChange(async (value) => {
-            this.plugin.settings.language = parseLanguage(value);
-            await this.plugin.saveSettings();
-            this.plugin.refreshLocalizedUI();
-            this.display();
-          })
-      );
+    row(this.plugin.t("settings.language.name"), this.plugin.t("settings.language.desc"), (setting) => {
+      setting
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption("auto", this.plugin.t("settings.language.auto"))
+            .addOption("zh", this.plugin.t("settings.language.zh"))
+            .addOption("en", this.plugin.t("settings.language.en"))
+            .setValue(this.plugin.settings.language)
+            .onChange(async (value) => {
+              this.plugin.settings.language = parseLanguage(value);
+              await this.plugin.saveSettings();
+              this.plugin.refreshLocalizedUI();
+              this.refreshSettings();
+            })
+        );
+    });
 
     if (!this.plugin.settings.deviceName.trim()) {
-      this.renderInitialDeviceName(containerEl);
-      return;
+      heading(this.plugin.t("settings.devices.setupTitle"));
+      row(this.plugin.t("settings.devices.setupName"), this.plugin.t("settings.devices.setupDesc"),
+        (setting) => this.renderDeviceName(setting));
+      return sections;
     }
 
-    new Setting(containerEl).setName(this.plugin.t("settings.server.title")).setHeading();
+    heading(this.plugin.t("settings.server.title"));
 
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.server.url"))
-      .setDesc(this.plugin.t("settings.server.urlDesc"))
-      .addText((text) =>
-        text
-          .setPlaceholder("http://localhost:8080")
-          .setValue(this.plugin.settings.serverUrl)
-          .onChange(async (value) => {
-            this.plugin.settings.serverUrl = value.trim().replace(/\/$/, "");
-            await this.plugin.saveSettings();
-          })
-      );
-
-    if (this.plugin.isLoggedIn()) {
-      new Setting(containerEl)
-        .setName(this.plugin.t("settings.server.signedIn"))
-        .setDesc(this.plugin.t("settings.server.signedInAs", { username: this.plugin.settings.username }))
-        .addButton((button) =>
-          button.setButtonText(this.plugin.t("settings.server.logoutButton")).setWarning().onClick(async () => {
-            await this.plugin.logout();
-            new Notice(this.plugin.t("notice.logoutSuccess"));
-            this.display();
-         })
-        );
-      new Setting(containerEl)
-        .setName(this.plugin.t("settings.devices.thisDevice"))
-        .setDesc(this.plugin.settings.deviceName);
-    } else {
-      this.renderLoggedOutDeviceName(containerEl);
-
-      new Setting(containerEl)
-        .setName(this.plugin.t("settings.server.username"))
+    row(this.plugin.t("settings.server.url"), this.plugin.t("settings.server.urlDesc"), (setting) => {
+      setting
         .addText((text) =>
           text
-            .setValue(this.plugin.settings.username)
+            .setPlaceholder("http://localhost:8080")
+            .setValue(this.plugin.settings.serverUrl)
             .onChange(async (value) => {
-              this.plugin.settings.username = value;
+              this.plugin.settings.serverUrl = value.trim().replace(/\/$/, "");
               await this.plugin.saveSettings();
             })
         );
+    });
 
-      new Setting(containerEl)
-        .setName(this.plugin.t("settings.server.password"))
-        .addText((text) => {
-          text.inputEl.type = "password";
-          text
-            .setValue(this.plugin.settings.password)
-            .onChange((value) => {
-              this.plugin.settings.password = value;
-            });
-        });
+    if (this.plugin.isLoggedIn()) {
+      row(this.plugin.t("settings.server.signedIn"), this.plugin.t("settings.server.signedInAs", { username: this.plugin.settings.username }), (setting) => {
+        setting
+          .addButton((button) =>
+            button.setButtonText(this.plugin.t("settings.server.logoutButton")).setWarning().onClick(async () => {
+              await this.plugin.logout();
+              new Notice(this.plugin.t("notice.logoutSuccess"));
+              this.refreshSettings();
+            })
+          );
+      });
+      row(this.plugin.t("settings.devices.thisDevice"), this.plugin.settings.deviceName);
+    } else {
+      row(this.plugin.t("settings.devices.thisDevice"), this.plugin.t("settings.devices.thisDeviceDesc"),
+        (setting) => this.renderDeviceName(setting));
 
-      const authSetting = new Setting(containerEl)
-        .setName(this.plugin.t("settings.server.login"))
-        .setDesc(this.plugin.t("settings.server.checking"))
-        .addButton((btn) =>
-          btn.setButtonText(this.plugin.t("settings.server.loginButton")).onClick(async () => {
-            const serverUrlError = validateServerURL(this.plugin.settings.serverUrl);
-            if (serverUrlError) {
-              new Notice(this.plugin.t(serverUrlError === "protocol_required" ? "settings.server.protocolRequired" : "settings.server.invalidUrl"));
-              return;
-            }
-            const error = this.validateCredentials();
-            if (error) {
-              new Notice(error);
-              return;
-            }
-            try {
-              const login = await this.plugin.login();
-              let message = this.plugin.settings.vaultId
-                ? this.plugin.t("notice.loginSuccess")
-                : this.plugin.t("notice.loginSuccessNoVault");
-              if (login.response.device_status === "pending") {
-                message = this.plugin.t("notice.loginPending");
+      row(this.plugin.t("settings.server.username"), undefined, (setting) => {
+        setting
+          .addText((text) =>
+            text
+              .setValue(this.plugin.settings.username)
+              .onChange(async (value) => {
+                this.plugin.settings.username = value;
+                await this.plugin.saveSettings();
+              })
+          );
+      });
+
+      row(this.plugin.t("settings.server.password"), undefined, (setting) => {
+        setting
+          .addText((text) => {
+            text.inputEl.type = "password";
+            text
+              .setValue(this.plugin.settings.password)
+              .onChange((value) => {
+                this.plugin.settings.password = value;
+              });
+          });
+      });
+
+      row(this.plugin.t("settings.server.login"), this.plugin.t("settings.server.checking"), (authSetting) => {
+        authSetting
+          .addButton((btn) =>
+            btn.setButtonText(this.plugin.t("settings.server.loginButton")).onClick(async () => {
+              const serverUrlError = validateServerURL(this.plugin.settings.serverUrl);
+              if (serverUrlError) {
+                new Notice(this.plugin.t(serverUrlError === "protocol_required" ? "settings.server.protocolRequired" : "settings.server.invalidUrl"));
+                return;
               }
-              if (login.replacedRevokedIdentity) {
-                message = this.plugin.t("notice.loginReregistered");
+              const error = this.validateCredentials();
+              if (error) {
+                new Notice(error);
+                return;
               }
-              new Notice(message);
-              this.display();
-            } catch (e) {
-              new Notice(this.plugin.t("notice.loginFailed", { error: this.errorMessage(e) }));
-            }
-          })
-        )
-        .addButton((btn) =>
-          btn.setButtonText(this.plugin.t("settings.server.registrationButton")).onClick(() => {
-            const serverUrlError = validateServerURL(this.plugin.settings.serverUrl);
-            if (serverUrlError) {
-              new Notice(this.plugin.t(serverUrlError === "protocol_required" ? "settings.server.protocolRequired" : "settings.server.invalidUrl"));
-              return;
-            }
-            window.open(this.plugin.webURL("/register"), "_blank", "noopener,noreferrer");
-          })
-        );
+              try {
+                const login = await this.plugin.login();
+                let message = this.plugin.settings.vaultId
+                  ? this.plugin.t("notice.loginSuccess")
+                  : this.plugin.t("notice.loginSuccessNoVault");
+                if (login.response.device_status === "pending") {
+                  message = this.plugin.t("notice.loginPending");
+                }
+                if (login.replacedRevokedIdentity) {
+                  message = this.plugin.t("notice.loginReregistered");
+                }
+                new Notice(message);
+                this.refreshSettings();
+              } catch (e) {
+                new Notice(this.plugin.t("notice.loginFailed", { error: this.errorMessage(e) }));
+              }
+            })
+          )
+          .addButton((btn) =>
+            btn.setButtonText(this.plugin.t("settings.server.registrationButton")).onClick(() => {
+              const serverUrlError = validateServerURL(this.plugin.settings.serverUrl);
+              if (serverUrlError) {
+                new Notice(this.plugin.t(serverUrlError === "protocol_required" ? "settings.server.protocolRequired" : "settings.server.invalidUrl"));
+                return;
+              }
+              window.open(this.plugin.webURL("/register"), "_blank", "noopener,noreferrer");
+            })
+          );
 
-      // 服务端地址可用时预取注册状态，据需要更新登录区的说明文案
-      if (!validateServerURL(this.plugin.settings.serverUrl)) {
-        void this.plugin.api.authStatus().then((status) => {
-          if (status.needs_first_admin) {
-            authSetting.setDesc(this.plugin.t("settings.server.needsAdmin"));
-          } else if (status.registration_enabled) {
-            authSetting.setDesc(this.plugin.t("settings.server.registrationOpen"));
-          } else {
-            authSetting.setDesc(this.plugin.t("settings.server.registrationClosed"));
-          }
-        }).catch((e: unknown) => {
-          authSetting.setDesc(this.plugin.t("settings.server.statusUnavailable"));
-          new Notice(this.plugin.t("notice.authStatusFailed", { error: this.errorMessage(e) }));
-        });
-      }
+        // 服务端地址可用时预取注册状态，据需要更新登录区的说明文案
+        if (!validateServerURL(this.plugin.settings.serverUrl)) {
+          void this.plugin.api.authStatus().then((status) => {
+            if (status.needs_first_admin) {
+              authSetting.setDesc(this.plugin.t("settings.server.needsAdmin"));
+            } else if (status.registration_enabled) {
+              authSetting.setDesc(this.plugin.t("settings.server.registrationOpen"));
+            } else {
+              authSetting.setDesc(this.plugin.t("settings.server.registrationClosed"));
+            }
+          }).catch((e: unknown) => {
+            authSetting.setDesc(this.plugin.t("settings.server.statusUnavailable"));
+            new Notice(this.plugin.t("notice.authStatusFailed", { error: this.errorMessage(e) }));
+          });
+        }
+      });
     }
 
     // 仓库分区：绑定已有仓库、下拉选项按 3 秒轮询刷新、以及新建仓库
 
-    new Setting(containerEl).setName(this.plugin.t("settings.vault.title")).setHeading();
+    heading(this.plugin.t("settings.vault.title"));
 
-    const boundVaultSetting = new Setting(containerEl)
-      .setName(this.plugin.t("settings.vault.bound"))
-      .setDesc(this.plugin.t("settings.vault.boundDesc"))
-      .addDropdown((dropdown) => {
+    row(this.plugin.t("settings.vault.bound"), this.plugin.t("settings.vault.boundDesc"), (setting) => {
+      let active = true;
+      this.stopVaultRefresh();
+      setting.addDropdown((dropdown) => {
         dropdown.addOption("", this.plugin.t("settings.vault.select"));
         dropdown.setValue(this.plugin.settings.vaultId);
         dropdown.onChange(async (vaultID) => {
@@ -192,7 +215,7 @@ export class OSSSettingTab extends PluginSettingTab {
           dropdown.addOption("", vaults.length === 0
             ? this.plugin.t("settings.vault.none")
             : this.plugin.t("settings.vault.select"));
-          boundVaultSetting.setDesc(
+          setting.setDesc(
             vaults.length === 0
               ? this.plugin.t("settings.vault.noneDesc")
               : this.plugin.t("settings.vault.boundDesc")
@@ -215,57 +238,270 @@ export class OSSSettingTab extends PluginSettingTab {
           if (!this.plugin.isLoggedIn()) return;
           try {
             const vaults = await this.plugin.refreshVaults();
+            if (!active) return;
             applyVaultOptions(vaults);
             // 登录后未绑定（例如绑定请求曾失败）时自动落到默认仓库
             if (!this.plugin.settings.vaultId && vaults.length > 0) {
               await this.plugin.ensureVaultBinding();
-              applyVaultOptions(await this.plugin.refreshVaults());
+              const refreshed = await this.plugin.refreshVaults();
+              if (active) applyVaultOptions(refreshed);
             }
           } catch {
             // 保留现有选项，下一次轮询继续尝试
           }
         };
-        // 3 秒轮询覆盖登录成功后仓库列表到位的时间差，重渲染前由 stopVaultRefresh 清理
+        // 3 秒轮询覆盖登录成功后仓库列表到位的时间差。
         void refreshVaultOptions();
-        this.vaultRefreshTimer = window.setInterval(() => {
+        const timer = window.setInterval(() => {
           void refreshVaultOptions();
         }, 3000);
+        this.cancelVaultRefresh = () => {
+          active = false;
+          window.clearInterval(timer);
+        };
       });
-    let newVaultName = "";
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.vault.create"))
-      .setDesc(this.plugin.t("settings.vault.createDesc"))
-      .addText((text) =>
-        text.setPlaceholder(this.plugin.t("settings.vault.namePlaceholder")).onChange((value) => {
-          newVaultName = value.trim();
-        })
-      )
-      .addButton((button) =>
-        button.setButtonText(this.plugin.t("settings.vault.createButton")).onClick(async () => {
-          if (!newVaultName) {
-            new Notice(this.plugin.t("notice.vaultNameRequired"));
-            return;
-          }
-          button.setDisabled(true);
-          try {
-            const vault = await this.plugin.api.createVault(newVaultName);
-            await this.plugin.refreshVaults();
-            const synced = await this.plugin.bindVault(vault);
-            new Notice(this.plugin.t(synced ? "notice.vaultCreated" : "notice.vaultCreatedPartial", { name: vault.name }));
-            this.display();
-          } catch (error: unknown) {
-            new Notice(this.plugin.t("notice.vaultCreateFailed", { error: this.errorMessage(error) }));
-          } finally {
-            button.setDisabled(false);
-          }
-        })
-      );
+      const cancel = this.cancelVaultRefresh;
+      return () => {
+        if (this.cancelVaultRefresh === cancel) this.stopVaultRefresh();
+      };
+    });
+
+    row(this.plugin.t("settings.vault.create"), this.plugin.t("settings.vault.createDesc"), (setting) => {
+      let newVaultName = "";
+      setting
+        .addText((text) =>
+          text.setPlaceholder(this.plugin.t("settings.vault.namePlaceholder")).onChange((value) => {
+            newVaultName = value.trim();
+          })
+        )
+        .addButton((button) =>
+          button.setButtonText(this.plugin.t("settings.vault.createButton")).onClick(async () => {
+            if (!newVaultName) {
+              new Notice(this.plugin.t("notice.vaultNameRequired"));
+              return;
+            }
+            button.setDisabled(true);
+            try {
+              const vault = await this.plugin.api.createVault(newVaultName);
+              await this.plugin.refreshVaults();
+              const synced = await this.plugin.bindVault(vault);
+              new Notice(this.plugin.t(synced ? "notice.vaultCreated" : "notice.vaultCreatedPartial", { name: vault.name }));
+              this.refreshSettings();
+            } catch (error: unknown) {
+              new Notice(this.plugin.t("notice.vaultCreateFailed", { error: this.errorMessage(error) }));
+            } finally {
+              button.setDisabled(false);
+            }
+          })
+        );
+    });
 
     // 设备分区：列出当前账号下各设备的同步游标，仅作只读展示
 
-    new Setting(containerEl).setName(this.plugin.t("settings.devices.title")).setHeading();
+    heading(this.plugin.t("settings.devices.title"));
 
-    const devicesEl = containerEl.createDiv({ cls: "oss-device-list" });
+    row(this.plugin.t("settings.devices.title"), undefined, (setting) => {
+      this.renderDeviceList(setting);
+    });
+
+    // 同步分区：间隔、轮询模式、并发、黑名单与诊断开关，均即时保存
+    // 涉及运行时机参数的项在保存后立即作用于同步引擎，不等待重启
+
+    heading(this.plugin.t("settings.sync.title"));
+
+    row(this.plugin.t("settings.sync.interval"), this.plugin.t("settings.sync.intervalDesc"), (setting) => {
+      setting
+        .addText((text) =>
+          text
+            .setPlaceholder("3")
+            .setValue(String(this.plugin.settings.syncIntervalSec))
+            .onChange(async (value) => {
+              const n = parseInt(value, 10);
+              if (!isNaN(n) && n >= 1) {
+                this.plugin.settings.syncIntervalSec = n;
+                await this.plugin.saveSettings();
+                this.plugin.syncEngine.resetDebounce();
+              }
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.mode"), this.plugin.t("settings.sync.modeDesc"), (setting) => {
+      setting
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption("short_poll", this.plugin.t("common.shortPoll"))
+            .addOption("long_poll", this.plugin.t("common.longPoll"))
+            .setValue(this.plugin.settings.vaultSyncMode)
+            .onChange(async (value) => {
+              this.plugin.settings.vaultSyncMode = value as "short_poll" | "long_poll";
+              await this.plugin.saveSettings();
+              await this.plugin.syncEngine.refreshPollingStrategy();
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.maxConcurrency"), this.plugin.t("settings.sync.maxConcurrencyDesc"), (setting) => {
+      setting
+        .addText((text) =>
+          text
+            .setPlaceholder("6")
+            .setValue(String(this.plugin.settings.maxConcurrency))
+            .onChange(async (value) => {
+              const n = parseInt(value, 10);
+              if (!isNaN(n) && n >= 1 && n <= 10) {
+                this.plugin.settings.maxConcurrency = n;
+                await this.plugin.saveSettings();
+              }
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.incremental"), this.plugin.t("settings.sync.incrementalDesc"), (setting) => {
+      setting
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.incrementalCheck)
+            .onChange(async (value) => {
+              this.plugin.settings.incrementalCheck = value;
+              await this.plugin.saveSettings();
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.remoteInterval"), this.plugin.t("settings.sync.remoteIntervalDesc"), (setting) => {
+      setting
+        .addText((text) =>
+          text
+            .setPlaceholder("3")
+            .setValue(String(this.plugin.settings.remotePollIntervalSec))
+            .onChange(async (value) => {
+              const n = parseInt(value, 10);
+              if (!isNaN(n) && n >= 3) {
+                this.plugin.settings.remotePollIntervalSec = n;
+                await this.plugin.saveSettings();
+                this.plugin.syncEngine.resetPolling();
+              }
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.forceSSE"), this.plugin.t("settings.sync.forceSSEDesc"), (setting) => {
+      setting
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.forceSSE)
+            .onChange(async (value) => {
+              // SSE 连接方式需重建协作管理器才能生效，仅在运行中才重启
+              this.plugin.settings.forceSSE = value;
+              await this.plugin.saveSettings();
+              if (this.plugin.collabManager.isRunning()) {
+                this.plugin.collabManager.stop();
+                this.plugin.collabManager.start();
+              }
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.diagnostics"), this.plugin.t("settings.sync.diagnosticsDesc"), (diagnosticsSetting) => {
+      diagnosticsSetting.setClass("oss-diagnostics-setting")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.diagnosticsEnabled)
+            .onChange(async (value) => {
+              this.plugin.settings.diagnosticsEnabled = value;
+              await this.plugin.saveSettings();
+              this.plugin.emitDiagnosticsEnabled(value);
+            })
+        );
+
+      const diagnosticActions = diagnosticsSetting.settingEl.createDiv({ cls: "oss-diagnostics-actions" });
+      const exportButton = new ButtonComponent(diagnosticActions)
+        .setButtonText(this.plugin.t("settings.diagnostics.exportButton"))
+        .onClick(async () => {
+          exportButton.setDisabled(true);
+          try {
+            await this.plugin.exportDiagnosticLogs();
+          } catch (error) {
+            new Notice(this.plugin.t("settings.diagnostics.failed", { error: this.plugin.localizedError(error) }), 10000);
+          } finally {
+            exportButton.setDisabled(false);
+          }
+        });
+      new ButtonComponent(diagnosticActions)
+        .setButtonText(this.plugin.t("settings.diagnostics.clear"))
+        .onClick(() => this.plugin.clearDiagnosticLogs());
+      return () => diagnosticActions.remove();
+    });
+
+    row(this.plugin.t("settings.sync.conflictEditWarning"), this.plugin.t("settings.sync.conflictEditWarningDesc"), (setting) => {
+      setting
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.conflictEditWarning)
+            .onChange(async (value) => {
+              this.plugin.settings.conflictEditWarning = value;
+              await this.plugin.saveSettings();
+            })
+        );
+    });
+
+    row(this.plugin.t("settings.sync.forceFull"), this.plugin.t("settings.sync.forceFullDesc"), (setting) => {
+      setting
+        .addButton((btn) =>
+          btn.setButtonText(this.plugin.t("settings.sync.syncNow")).onClick(async () => {
+            const synced = await this.plugin.syncEngine.runOnce({ forceFull: true });
+            if (!synced) new Notice(this.plugin.t("notice.syncIncomplete"));
+          })
+        );
+    });
+
+    row(this.plugin.t("shareGuide.title"), this.plugin.t("shareGuide.entry"), (setting) => {
+      addShareGuideButton(setting, this.app, this.plugin);
+    });
+
+    heading(this.plugin.t("settings.update.title"));
+    row(this.plugin.t("settings.update.currentVersion", { version: this.plugin.manifest.version }),
+      this.plugin.t("settings.update.marketplace"));
+    if (this.plugin.isAdmin()) {
+      heading(this.plugin.t("settings.serverUpdate.title"));
+      row(this.plugin.t("settings.serverUpdate.check"), this.plugin.t("settings.serverUpdate.desc"), (setting) => {
+        this.renderServerUpdateSection(this.createSettingsBlock(setting));
+      });
+    }
+    return sections;
+  }
+
+  /** 较旧宿主用同一份定义渲染，避免两套设置逻辑产生差异。 */
+  display(): void {
+    this.renderLegacySettings();
+  }
+
+  private renderLegacySettings(): void {
+    this.stopVaultRefresh();
+    this.containerEl.empty();
+    for (const section of this.getSettingDefinitions()) {
+      if (section.heading) new Setting(this.containerEl).setName(section.heading).setHeading();
+      for (const definition of section.items) {
+        const setting = new Setting(this.containerEl).setName(definition.name);
+        if (definition.desc) setting.setDesc(definition.desc);
+        definition.render?.(setting);
+      }
+    }
+  }
+
+  private refreshSettings(): void {
+    if (requireApiVersion("1.13.0")) this.update();
+    else this.renderLegacySettings();
+  }
+
+  private createSettingsBlock(setting: Setting): HTMLElement {
+    setting.setClass("oss-settings-block");
+    return setting.controlEl.createDiv();
+  }
+
+  private renderDeviceList(setting: Setting): void {
+    const devicesEl = this.createSettingsBlock(setting).createDiv({ cls: "oss-device-list" });
     devicesEl.setText(this.plugin.t("settings.devices.loading"));
     void this.plugin.api.listDevices().then((result) => {
       devicesEl.empty();
@@ -290,165 +526,6 @@ export class OSSSettingTab extends PluginSettingTab {
       devicesEl.setText(this.plugin.t("settings.devices.loadFailed"));
       new Notice(this.plugin.t("notice.devicesLoadFailed", { error: this.errorMessage(error) }));
     });
-
-    // 同步分区：间隔、轮询模式、并发、黑名单与诊断开关，均即时保存
-    // 涉及运行时机参数的项在保存后立即作用于同步引擎，不等待重启
-
-    new Setting(containerEl).setName(this.plugin.t("settings.sync.title")).setHeading();
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.interval"))
-      .setDesc(this.plugin.t("settings.sync.intervalDesc"))
-      .addText((text) =>
-        text
-          .setPlaceholder("3")
-          .setValue(String(this.plugin.settings.syncIntervalSec))
-          .onChange(async (value) => {
-            const n = parseInt(value, 10);
-            if (!isNaN(n) && n >= 1) {
-              this.plugin.settings.syncIntervalSec = n;
-              await this.plugin.saveSettings();
-              this.plugin.syncEngine.resetDebounce();
-            }
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.mode"))
-      .setDesc(this.plugin.t("settings.sync.modeDesc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("short_poll", this.plugin.t("common.shortPoll"))
-          .addOption("long_poll", this.plugin.t("common.longPoll"))
-          .setValue(this.plugin.settings.vaultSyncMode)
-          .onChange(async (value) => {
-            this.plugin.settings.vaultSyncMode = value as "short_poll" | "long_poll";
-            await this.plugin.saveSettings();
-            await this.plugin.syncEngine.refreshPollingStrategy();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.maxConcurrency"))
-      .setDesc(this.plugin.t("settings.sync.maxConcurrencyDesc"))
-      .addText((text) =>
-        text
-          .setPlaceholder("6")
-          .setValue(String(this.plugin.settings.maxConcurrency))
-          .onChange(async (value) => {
-            const n = parseInt(value, 10);
-            if (!isNaN(n) && n >= 1 && n <= 10) {
-              this.plugin.settings.maxConcurrency = n;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.incremental"))
-      .setDesc(this.plugin.t("settings.sync.incrementalDesc"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.incrementalCheck)
-          .onChange(async (value) => {
-            this.plugin.settings.incrementalCheck = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.remoteInterval"))
-      .setDesc(this.plugin.t("settings.sync.remoteIntervalDesc"))
-      .addText((text) =>
-        text
-          .setPlaceholder("3")
-          .setValue(String(this.plugin.settings.remotePollIntervalSec))
-          .onChange(async (value) => {
-            const n = parseInt(value, 10);
-            if (!isNaN(n) && n >= 3) {
-              this.plugin.settings.remotePollIntervalSec = n;
-              await this.plugin.saveSettings();
-              this.plugin.syncEngine.resetPolling();
-            }
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.forceSSE"))
-      .setDesc(this.plugin.t("settings.sync.forceSSEDesc"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.forceSSE)
-          .onChange(async (value) => {
-            // SSE 连接方式需重建协作管理器才能生效，仅在运行中才重启
-            this.plugin.settings.forceSSE = value;
-            await this.plugin.saveSettings();
-            if (this.plugin.collabManager.isRunning()) {
-              this.plugin.collabManager.stop();
-              this.plugin.collabManager.start();
-            }
-          })
-      );
-
-    const diagnosticsSetting = new Setting(containerEl)
-      .setClass("oss-diagnostics-setting")
-      .setName(this.plugin.t("settings.sync.diagnostics"))
-      .setDesc(this.plugin.t("settings.sync.diagnosticsDesc"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.diagnosticsEnabled)
-          .onChange(async (value) => {
-            this.plugin.settings.diagnosticsEnabled = value;
-            await this.plugin.saveSettings();
-            this.plugin.emitDiagnosticsEnabled(value);
-          })
-      );
-
-    const diagnosticActions = diagnosticsSetting.settingEl.createDiv({ cls: "oss-diagnostics-actions" });
-    const exportButton = new ButtonComponent(diagnosticActions)
-      .setButtonText(this.plugin.t("settings.diagnostics.exportButton"))
-      .onClick(async () => {
-        exportButton.setDisabled(true);
-        try {
-          await this.plugin.exportDiagnosticLogs();
-        } catch (error) {
-          new Notice(this.plugin.t("settings.diagnostics.failed", { error: this.plugin.localizedError(error) }), 10000);
-        } finally {
-          exportButton.setDisabled(false);
-        }
-      });
-    new ButtonComponent(diagnosticActions)
-      .setButtonText(this.plugin.t("settings.diagnostics.clear"))
-      .onClick(() => this.plugin.clearDiagnosticLogs());
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.conflictEditWarning"))
-      .setDesc(this.plugin.t("settings.sync.conflictEditWarningDesc"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.conflictEditWarning)
-          .onChange(async (value) => {
-            this.plugin.settings.conflictEditWarning = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.sync.forceFull"))
-      .setDesc(this.plugin.t("settings.sync.forceFullDesc"))
-      .addButton((btn) =>
-        btn.setButtonText(this.plugin.t("settings.sync.syncNow")).onClick(async () => {
-          const synced = await this.plugin.syncEngine.runOnce({ forceFull: true });
-          if (!synced) new Notice(this.plugin.t("notice.syncIncomplete"));
-        })
-      );
-
-    renderShareGuideEntry(containerEl, this.app, this.plugin);
-
-    this.renderUpdateSection(containerEl);
-    if (this.plugin.isAdmin()) {
-      this.renderServerUpdateSection(containerEl);
-    }
   }
 
   /** 设置页隐藏时停止仓库轮询，避免后台持续请求 */
@@ -459,23 +536,17 @@ export class OSSSettingTab extends PluginSettingTab {
 
   /** 清理仓库下拉轮询句柄 */
   private stopVaultRefresh(): void {
-    if (this.vaultRefreshTimer !== null) {
-      window.clearInterval(this.vaultRefreshTimer);
-      this.vaultRefreshTimer = null;
-    }
+    this.cancelVaultRefresh?.();
+    this.cancelVaultRefresh = null;
   }
 
-  /** 未登录状态下渲染设备名输入，保存后写入设置并刷新页面 */
-  private renderLoggedOutDeviceName(containerEl: HTMLElement): void {
+  /** 首次初始化和未登录时复用设备名输入。 */
+  private renderDeviceName(setting: Setting): void {
     let deviceName = this.plugin.settings.deviceName;
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.devices.thisDevice"))
-      .setDesc(this.plugin.t("settings.devices.thisDeviceDesc"))
-      .addText((text) => text
-        .setValue(deviceName)
-        .onChange((value) => {
-          deviceName = value.trim();
-        }))
+    setting
+      .addText((text) => text.setValue(deviceName).onChange((value) => {
+        deviceName = value.trim();
+      }))
       .addButton((button) => button
         .setButtonText(this.plugin.t("common.save"))
         .onClick(async () => {
@@ -486,48 +557,15 @@ export class OSSSettingTab extends PluginSettingTab {
           try {
             await this.plugin.setDeviceName(deviceName);
             new Notice(this.plugin.t("notice.deviceNameSaved"));
-            this.display();
+            this.refreshSettings();
           } catch (error: unknown) {
             new Notice(this.errorMessage(error));
           }
         }));
   }
 
-  /** 首次使用时的设备名初始化分区，未填写设备名时其余设置项不渲染 */
-  private renderInitialDeviceName(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName(this.plugin.t("settings.devices.setupTitle")).setHeading();
-    let deviceName = this.plugin.settings.deviceName;
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.devices.setupName"))
-      .setDesc(this.plugin.t("settings.devices.setupDesc"))
-      .addText((text) => text.setValue(deviceName).onChange((value) => {
-        deviceName = value.trim();
-      }))
-      .addButton((button) => button.setButtonText(this.plugin.t("common.save")).onClick(async () => {
-        if (!deviceName) {
-          new Notice(this.plugin.t("notice.deviceNameRequired"));
-          return;
-        }
-        try {
-          await this.plugin.setDeviceName(deviceName);
-          new Notice(this.plugin.t("notice.deviceNameSaved"));
-          this.display();
-        } catch (error: unknown) {
-          new Notice(this.errorMessage(error));
-        }
-      }));
-  }
-
-  private renderUpdateSection(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName(this.plugin.t("settings.update.title")).setHeading();
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.update.currentVersion", { version: this.plugin.manifest.version }))
-      .setDesc(this.plugin.t("settings.update.marketplace"));
-  }
-
   /** 服务端更新分区：状态检查与触发更新串行执行，更新期间禁用检查与触发按钮 */
   private renderServerUpdateSection(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName(this.plugin.t("settings.serverUpdate.title")).setHeading();
     containerEl.createEl("p", { text: this.plugin.t("settings.serverUpdate.desc"), cls: "setting-item-description" });
 
 

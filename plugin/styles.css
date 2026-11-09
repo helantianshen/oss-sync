@@ -205,6 +205,19 @@
   object-fit: contain;
 }
 
+.setting-item.oss-settings-block {
+  display: block;
+}
+
+.setting-item.oss-settings-block > .setting-item-info {
+  display: none;
+}
+
+.setting-item.oss-settings-block > .setting-item-control {
+  display: block;
+  width: 100%;
+}
+
 .oss-settings-brand {
   display: flex;
   align-items: center;

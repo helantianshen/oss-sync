@@ -259,7 +259,7 @@ html[data-theme="dark"] .gl-post::after { background: linear-gradient(115deg, tr
 .reading-toc__panel-title { font-size: 14px; }
 
 /* ---------- 页脚 ---------- */
-.reading-status { position: fixed; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
+.reading-status { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; white-space: nowrap; border: 0; }
 .oss-notice { width: min(960px, calc(100% - 32px)); margin: 0 auto; padding: 13px 18px; color: var(--gl-muted); background: var(--gl-glass); border: 1px solid var(--gl-line); border-radius: 14px; }
 .oss-repository-link { margin: 26px 0 16px; color: var(--gl-muted); font-size: 12px; text-align: center; }
 .oss-repository-link a { color: inherit; text-decoration: none; }
@@ -295,14 +295,14 @@ html[data-theme="dark"] .gl-post::after { background: linear-gradient(115deg, tr
 
 /* ---------- 宽屏侧边目录：两栏 grid（正文列 + 目录列），目录 sticky 跟随 ---------- */
 @media (min-width: 1320px) {
-  .gl-main:has(> .reading-toc) {
+  .gl-main.with-reading-toc {
     display: grid;
     grid-template-columns: minmax(0, 820px) 220px;
     justify-content: center;
     gap: 0 44px;
     align-items: start;
   }
-  .gl-main:has(> .reading-toc) .reading-toc {
+  .gl-main.with-reading-toc .reading-toc {
     position: sticky;
     top: 88px;
     grid-column: 2;
@@ -312,12 +312,12 @@ html[data-theme="dark"] .gl-post::after { background: linear-gradient(115deg, tr
     margin: 0;
     align-self: start;
   }
-  .gl-main:has(> .reading-toc) .gl-article {
+  .gl-main.with-reading-toc .gl-article {
     grid-column: 1;
     grid-row: 1;
     width: auto;
     max-width: none;
     margin-inline: 0;
   }
-  .gl-main:has(> .reading-toc) .reading-toc__open { display: none; }
+  .gl-main.with-reading-toc .reading-toc__open { display: none; }
 }

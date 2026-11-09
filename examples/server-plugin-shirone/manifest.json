@@ -1,7 +1,7 @@
 {
   "id": "shirone",
   "name": "Shirone 博客模板",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "适配 OSS Sync 插件资源接口的 Shirone 博客模板",
   "api_version": 1,
   "runtime": "wasm",

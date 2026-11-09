@@ -3,12 +3,16 @@ import type OSSPlugin from "./main";
 import type { TranslationKey } from "./i18n";
 
 export function renderShareGuideEntry(container: HTMLElement, app: App, plugin: OSSPlugin): void {
-  new Setting(container)
+  const setting = new Setting(container)
     .setName(plugin.t("shareGuide.title"))
-    .setDesc(plugin.t("shareGuide.entry"))
-    .addButton((button) => button
-      .setButtonText(plugin.t("shareGuide.open"))
-      .onClick(() => new ShareGuideModal(app, plugin).open()));
+    .setDesc(plugin.t("shareGuide.entry"));
+  addShareGuideButton(setting, app, plugin);
+}
+
+export function addShareGuideButton(setting: Setting, app: App, plugin: OSSPlugin): void {
+  setting.addButton((button) => button
+    .setButtonText(plugin.t("shareGuide.open"))
+    .onClick(() => new ShareGuideModal(app, plugin).open()));
 }
 
 export class ShareGuideModal extends Modal {

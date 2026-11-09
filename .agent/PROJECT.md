@@ -147,6 +147,6 @@
 
 - [release.yml](../.github/workflows/release.yml) 接受 `X.Y.Z` 或 `X.Y.Z-rc.N`（可带 `v` 前缀）的标签，并检查提交属于远程 `main` 历史；不能概括为支持全部 SemVer 标签。
 - 工作流配置构建 Linux amd64/arm64、macOS amd64/arm64、Windows amd64 后端，以及插件、独立 Linux oss.sh 和校验文件，平台运行包包含程序与配置；发布 GHCR 多架构镜像，正式版本另带 `latest` 标签。配置存在不代表远程发布成功。
-- 服务端发布版本由构建参数注入，插件 Release manifest 也由工作流改写版本；本地 manifest、源码默认版本和标签不能单独作为当前公开版本的证据。
+- 服务端发布版本由构建参数注入；插件 Release 清单直接取自标签。正式标签的两份清单须一致，公开根清单在资源核验后通过合入发布提交同步。
 - 后端修改的最小检查为 `gofmt`、`go test ./...`、`go vet ./...`；涉及同步并发时追加 `go test -race ./...`。插件使用 Node.js 20+，在 `plugin/` 执行 `npm ci`、`npm exec tsc -- --noEmit`、`npm test`、`npm run build`。CI 配置见 [ci.yml](../.github/workflows/ci.yml)。
 - 文档修改至少核对路径、命令和配置名；任务记录只写实际执行的检查。源码中的测试和 CI 定义不等于已通过的验收结果。

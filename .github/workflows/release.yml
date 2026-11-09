@@ -28,12 +28,26 @@ jobs:
         id: version
         shell: bash
         run: |
+          set -euo pipefail
           if [[ ! "$GITHUB_REF_NAME" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
             echo "Release tag must match <major>.<minor>.<patch>[-rc.<number>] with optional v prefix" >&2
             exit 1
           fi
           git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            # Keep the public manifest on the previous release until assets are available.
+            read -r -a lineage <<< "$(git rev-list --parents -n 1 "$GITHUB_SHA")"
+            if [[ "$GITHUB_REF_NAME" == *-rc.* || "${#lineage[@]}" != 2 ]]; then
+              echo "Tag must be on main or a stable manifest-only release commit"
+              exit 1
+            fi
+            parent="${lineage[1]}"
+            git merge-base --is-ancestor "$parent" origin/main
+            if [[ "$(git diff --name-only "$parent" "$GITHUB_SHA" --)" != manifest.json ]]; then
+              echo "Release commit outside main may only change the root manifest"
+              exit 1
+            fi
+          fi
           python3 scripts/check-versions.py --release "$GITHUB_REF_NAME"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF_NAME" == *-rc.* ]]; then

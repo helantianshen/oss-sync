@@ -21,8 +21,11 @@ def check_versions(release: str = "") -> str:
     current = manifest["version"]
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.\d+)?", current):
         raise SystemExit(f"plugin/manifest.json: invalid release version {current!r}")
-    if release and release.removeprefix("v") != current:
-        raise SystemExit(f"release {release} does not match plugin version {current}")
+    if release:
+        if release.removeprefix("v") != current:
+            raise SystemExit(f"release {release} does not match plugin version {current}")
+        if "-rc." not in current and data["manifest.json"] != manifest:
+            raise SystemExit("stable release tag must contain identical root and plugin manifests")
     for path, actual in (
         ("plugin/package.json", data["plugin/package.json"]["version"]),
         ("plugin/package-lock.json", data["plugin/package-lock.json"]["version"]),

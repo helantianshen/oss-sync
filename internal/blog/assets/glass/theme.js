@@ -236,6 +236,7 @@
     window.addEventListener("resize", onMediaOrResize);
     window.addEventListener("scroll", onScroll, { passive: true });
     refreshOnScroll();
+    toc.parentElement.classList.add("with-reading-toc");
     toc.hidden = false;
   };
 

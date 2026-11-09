@@ -27,7 +27,7 @@
 
 /* 布局：宽留白居中 + 侧栏细线 */
 body.body--console { grid-template-columns: 236px minmax(0, 1fr); }
-.console-content { max-width: 1020px; margin-inline: auto; padding-top: 22px !important; }
+.console-content { max-width: 1020px; margin-inline: auto; --console-content-top: 22px; }
 /* 朱砂印章徽标 */
 .wordmark__mark { box-shadow: inset 0 0 0 2px rgba(247, 245, 240, .35); }
 /* 侧栏激活态：朱砂左缘 */
@@ -41,7 +41,7 @@ body.body--console { grid-template-columns: 236px minmax(0, 1fr); }
 input, select, textarea {
   border: 0; border-bottom: 2px solid var(--line-dark);
   background: transparent; padding: 9px 4px;
-  transition: border-color .28s, box-shadow .28s;
+  transition: var(--console-transition, border-color .28s, box-shadow .28s);
 }
 input:focus, select:focus, textarea:focus { border-bottom-color: var(--cobalt); box-shadow: 0 2px 0 var(--cobalt); outline: none; }
 select { background: var(--paper); }
@@ -51,7 +51,7 @@ select { background: var(--paper); }
 .gate-panel h2::after {
   content: ""; display: block; width: 44px; height: 3px; margin-top: 10px;
   background: linear-gradient(90deg, var(--cobalt), transparent);
-  transform-origin: left; animation: ink-line .7s ease .3s both;
+  transform-origin: left; animation: var(--console-animation, ink-line .7s ease .3s both);
 }
 @keyframes ink-line { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
@@ -65,12 +65,12 @@ h1, h2, h3 { font-weight: 600; letter-spacing: .06em; }
 
 /* 动画：墨迹晕开 */
 @keyframes ink-in { from { opacity: 0; filter: blur(8px); transform: translateY(10px); } to { opacity: 1; filter: blur(0); transform: none; } }
-.gate-panel, .metric-card { animation: ink-in .8s ease both; }
+.gate-panel, .metric-card { animation: var(--console-animation, ink-in .8s ease both); }
 .gate-panel:nth-of-type(2) { animation-delay: .12s; }
 .gate-panel:nth-of-type(3) { animation-delay: .24s; }
-.gate-panel, .metric-card { transition: box-shadow .24s; }
+.gate-panel, .metric-card { transition: var(--console-transition, box-shadow .24s); }
 .gate-panel:hover { box-shadow: 0 8px 26px rgba(38, 36, 31, .16); }
-a, tr { transition: color .2s, background .2s; }
+a, tr { transition: var(--console-transition, color .2s, background .2s); }
 
 /* ---------- 窄屏抽屉重置：贴边全高、去浮岛描边与圆角（白线根因） ---------- */
 @media (max-width: 900px) {
@@ -85,13 +85,12 @@ a, tr { transition: color .2s, background .2s; }
   .console-topbar { border-radius: 0; margin-bottom: 0; }
 }
 
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 
 /* ===== 设计系统骨架（经典主题不含此段；圆角数值见 :root 变量） ===== */
 .gate-panel { display: grid; grid-template-columns: 1fr; border: 0; overflow: clip; border-radius: var(--panel-radius); box-shadow: 0 0 0 1.5px var(--line), var(--shadow, 0 10px 30px rgba(16, 24, 43, .08)); }
 .gate-panel__copy {
-  display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 14px; row-gap: 2px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px;
   border-right: 0; border-bottom: 1px solid var(--line); padding: 14px 24px;
 }
 .gate-panel__copy .eyebrow { font-size: 10px; letter-spacing: .2em; }
@@ -122,10 +121,9 @@ input, select, textarea { border-radius: var(--field-radius); }
 .gate-form.stack-form .system-settings-group__actions .button--primary { box-shadow: 0 6px 18px rgba(16, 24, 43, .25); }
 /* 系统设置：总览单列 + 分组瀑布流 */
 @media (min-width: 1320px) {
-  .gate-panel:has(> .gate-form .system-settings-groups) { grid-template-columns: 1fr; }
-  .gate-panel:has(> .gate-form .system-settings-groups) .gate-panel__copy { text-align: center; }
-  .system-settings-groups { display: block; columns: 2; column-gap: 18px; }
-  .system-settings-group { break-inside: avoid; margin: 0 0 18px; }
+  .gate-panel--system-settings { grid-template-columns: 1fr; }
+  .gate-panel--system-settings .gate-panel__copy { text-align: center; }
+  .system-settings-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 }
 /* 行式设置项：说明左、控件右 */
 @media (min-width: 680px) {
@@ -133,7 +131,7 @@ input, select, textarea { border-radius: var(--field-radius); }
   .system-settings-group__fields > label {
     display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px;
     padding: 10px 4px; border-bottom: 1px solid var(--line); border-radius: 6px;
-    transition: background .15s;
+    transition: var(--console-transition, background .15s);
   }
   .system-settings-group__fields > label:hover { background: color-mix(in srgb, var(--surface-soft) 60%, transparent); }
   .system-settings-group__fields > label:last-child { border-bottom: 0; }
@@ -149,9 +147,8 @@ input, select, textarea { border-radius: var(--field-radius); }
 }
 /* 个人中心：瀑布流错位两栏 + 同步偏好字段自适应两列 */
 @media (min-width: 1200px) {
-  .control-grid:has(#sync-settings) { display: block; columns: 2; column-gap: 18px; }
-  .control-grid:has(#sync-settings) > article { break-inside: avoid; margin: 0 0 18px; }
-  .control-grid:has(#sync-settings) > .ledger-panel { column-span: all; margin-bottom: 18px; }
+  .control-grid--account { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .control-grid--account > .ledger-panel { grid-column: 1 / -1; }
   #sync-settings .gate-form { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 16px; }
   #sync-settings .gate-form > .button--primary { grid-column: 1 / -1; }
   #sync-settings .gate-form > small { grid-column: 1 / -1; }

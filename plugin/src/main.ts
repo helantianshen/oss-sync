@@ -8,6 +8,7 @@ import {
   Notice,
   Plugin,
   PluginManifest,
+  requireApiVersion,
   TAbstractFile,
   TFile,
   TFolder,
@@ -91,6 +92,7 @@ export default class OSSPlugin extends Plugin {
   private token?: string;
   private statusBarEl?: HTMLElement;
   private ribbonEl?: HTMLElement;
+  private ossSettingTab?: OSSSettingTab;
   /** 已注册命令与其翻译键的对应表，语言切换时据此刷新命令名 */
   private readonly localizedCommands: Array<{ command: Command; key: TranslationKey }> = [];
   availableVaults: VaultOut[] = [];
@@ -251,7 +253,8 @@ export default class OSSPlugin extends Plugin {
       })
     );
 
-    this.addSettingTab(new OSSSettingTab(this.app, this));
+    this.ossSettingTab = new OSSSettingTab(this.app, this);
+    this.addSettingTab(this.ossSettingTab);
 
     this.app.workspace.onLayoutReady(() => {
       if (!this.loaded) return;
@@ -307,6 +310,7 @@ export default class OSSPlugin extends Plugin {
   /** 宿主不会等待异步卸载，所有轮询必须同步停止；已入队保存继续完成并记录失败 */
   onunload(): void {
     this.loaded = false;
+    this.ossSettingTab = undefined;
     if (this.pluginVersionCheckTimer !== null) window.clearInterval(this.pluginVersionCheckTimer);
     this.pluginVersionCheckTimer = null;
     setNonJsonSink(null);
@@ -668,6 +672,7 @@ export default class OSSPlugin extends Plugin {
     this.settings.vaultName = "";
     this.syncEngine.stop();
     this.collabManager.stop();
+    if (requireApiVersion("1.13.0")) this.ossSettingTab?.update();
     await this.saveSettings();
     this.setSyncState("idle");
     new Notice(this.t("notice.reloginRequired"));
@@ -680,6 +685,7 @@ export default class OSSPlugin extends Plugin {
     this.availableVaults = [];
     this.syncEngine.stop();
     this.collabManager.stop();
+    if (requireApiVersion("1.13.0")) this.ossSettingTab?.update();
     await this.saveSettings();
     this.setSyncState("idle");
     new Notice(this.t("auth.tokenExpired"));

@@ -11,7 +11,7 @@ async function load(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const outfile = join(dir, "test.mjs");
   await build({
-    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine", "settings-tab"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
     outfile, bundle: true, platform: "node", format: "esm",
     plugins: [{ name: "mobile-host", setup(builder) {
       builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "host" }));
@@ -21,12 +21,60 @@ async function load(t) {
         export class Notice{constructor(message){host.notices??=[];host.notices.push(message);}} export class App{} export class TAbstractFile{} export class TFile{} export class TFolder{} export class Vault{}
         export class Modal{} export class Setting{} export class ButtonComponent{} export class ItemView{} export class Plugin{} export class PluginSettingTab{}
         export const normalizePath=p=>p; export function setIcon(){} export const apiVersion="1.14.5";
+        export function requireApiVersion(){return true;}
         export function getLanguage(){return "zh";} export class MarkdownRenderer{}
       ` }));
     } }],
   });
   return import(pathToFileURL(outfile).href);
 }
+
+test("settings can be indexed before rendering and the indexed sync control still saves changes", async (t) => {
+  const { OSSSettingTab } = await load(t);
+  const settings = { deviceName: "", username: "tester", syncIntervalSec: 3 };
+  const operations = [];
+  let loggedIn = false;
+  const tab = new OSSSettingTab({}, {
+    t: (key) => key,
+    settings,
+    manifest: { version: "0.3.4" },
+    isLoggedIn: () => loggedIn,
+    isAdmin: () => false,
+    saveSettings: async () => { operations.push("save"); },
+    syncEngine: { resetDebounce: () => { operations.push("reset"); } },
+    get api() { throw new Error("Indexing must not start an API request"); },
+  });
+  const indexedRows = () => tab.getSettingDefinitions()
+    .flatMap((section) => section.items)
+    .filter((row) => row.searchable !== false);
+  assert.deepEqual(indexedRows().map((row) => row.name), ["settings.language.name", "settings.devices.setupName"]);
+
+  settings.deviceName = "Test device";
+  assert.ok(indexedRows().some((row) => row.name === "settings.server.login"));
+  loggedIn = true;
+  const rows = indexedRows();
+  assert.ok(rows.some((row) => row.name === "settings.server.signedIn"));
+  assert.ok(!rows.some((row) => row.name === "settings.server.login"));
+  assert.ok(!rows.some((row) => row.name === "settings.serverUpdate.check"));
+
+  const interval = rows.find((row) => row.name === "settings.sync.interval");
+  assert.equal(interval.desc, "settings.sync.intervalDesc");
+  let change;
+  interval.render({
+    addText(render) {
+      render({
+        setPlaceholder() { return this; },
+        setValue(value) { assert.equal(value, "3"); return this; },
+        onChange(callback) { change = callback; },
+      });
+    },
+  });
+  await change("0");
+  assert.deepEqual(operations, []);
+  await change("7");
+  assert.equal(settings.syncIntervalSec, 7);
+  assert.deepEqual(operations, ["save", "reset"]);
+});
 
 test("mobile file downloads skip the native JSON getter and preserve every byte", async (t) => {
   const m = await load(t);

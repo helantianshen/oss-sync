@@ -32,11 +32,11 @@
 /* 流动渐变底 */
 body.body--console, body.body--auth, body.public-home {
   background: linear-gradient(120deg, #dbe4f8, #e9def5, #fbe0ec, #dbe4f8);
-  background-size: 300% 300%; animation: glass-flow 22s ease-in-out infinite;
+  background-size: 300% 300%; animation: var(--console-animation, glass-flow 22s ease-in-out infinite);
 }
 :root[data-theme="dark"] body.body--console, :root[data-theme="dark"] body.body--auth, :root[data-theme="dark"] body.public-home {
   background: linear-gradient(120deg, #141830, #1d1430, #251428, #141830);
-  background-size: 300% 300%; animation: glass-flow 22s ease-in-out infinite;
+  background-size: 300% 300%; animation: var(--console-animation, glass-flow 22s ease-in-out infinite);
 }
 @keyframes glass-flow { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
 
@@ -51,7 +51,7 @@ body.body--console, body.body--auth, body.public-home {
 /* 浮岛侧栏 */
 .sidebar { top: 14px; height: calc(100vh - 28px); }
 body.body--console { grid-template-columns: 256px minmax(0, 1fr); gap: 0 20px; padding-block: 14px; }
-.console-content { max-width: 1180px; margin-inline: auto; padding-top: 16px !important; }
+.console-content { max-width: 1180px; margin-inline: auto; --console-content-top: 16px; }
 .wordmark__mark { background: var(--wordmark-bg); color: #fff; }
 
 /* hover 光泽扫过（限于面板内，不外溢） */
@@ -60,7 +60,7 @@ body.body--console { grid-template-columns: 256px minmax(0, 1fr); gap: 0 20px; p
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, .3) 50%, transparent 60%);
   background-size: 260% 100%; background-position: 120% 0; opacity: 0;
-  transition: background-position .7s ease, opacity .25s ease;
+  transition: var(--console-transition, background-position .7s ease, opacity .25s ease);
 }
 .gate-panel:hover::after, .metric-card:hover::after { background-position: -20% 0; opacity: 1; }
 
@@ -71,16 +71,16 @@ body { line-height: 1.85; }
 
 /* 动画：浮现 stagger */
 @keyframes glass-rise { from { opacity: 0; transform: translateY(22px) scale(.98); } to { opacity: 1; transform: none; } }
-.gate-panel, .metric-card { animation: glass-rise .6s cubic-bezier(.22, .9, .3, 1) both; }
+.gate-panel, .metric-card { animation: var(--console-animation, glass-rise .6s cubic-bezier(.22, .9, .3, 1) both); }
 .metric-card:nth-child(2) { animation-delay: .06s; }
 .metric-card:nth-child(3) { animation-delay: .12s; }
 .metric-card:nth-child(4) { animation-delay: .18s; }
 .metric-card:nth-child(5) { animation-delay: .24s; }
 .gate-panel:nth-of-type(2) { animation-delay: .08s; }
-.gate-panel, .metric-card { transition: transform .26s ease, box-shadow .26s; }
+.gate-panel, .metric-card { transition: var(--console-transition, transform .26s ease, box-shadow .26s); }
 .gate-panel:hover { transform: translateY(-4px); }
-.button, a, tr { transition: color .18s, background .18s, transform .18s; }
-input, select, textarea { transition: border-color .22s, box-shadow .22s; }
+.button, a, tr { transition: var(--console-transition, color .18s, background .18s, transform .18s); }
+input, select, textarea { transition: var(--console-transition, border-color .22s, box-shadow .22s); }
 input:focus, select:focus, textarea:focus { border-color: var(--cobalt); box-shadow: 0 0 0 4px color-mix(in srgb, var(--cobalt) 18%, transparent); outline: none; }
 
 /* ---------- 窄屏抽屉重置：贴边全高、去浮岛描边与圆角（白线根因） ---------- */
@@ -96,7 +96,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--cobalt); box-sha
   .console-topbar { border-radius: 0; margin-bottom: 0; }
 }
 
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 
 /* ===== 设计系统骨架（经典主题不含此段；圆角数值见 :root 变量） ===== */
@@ -104,7 +103,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--cobalt); box-sha
 .sidebar__foot { border-top: 0; }
 .gate-panel { display: grid; grid-template-columns: 1fr; border: 0; overflow: clip; border-radius: var(--panel-radius); box-shadow: var(--shadow, 0 10px 30px rgba(16, 24, 43, .08)); }
 .gate-panel__copy {
-  display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 14px; row-gap: 2px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px;
   border-right: 0; border-bottom: 1px solid var(--line); padding: 14px 24px;
 }
 .gate-panel__copy .eyebrow { font-size: 10px; letter-spacing: .2em; }
@@ -135,10 +134,9 @@ input, select, textarea { border-radius: var(--field-radius); }
 .gate-form.stack-form .system-settings-group__actions .button--primary { box-shadow: 0 6px 18px rgba(16, 24, 43, .25); }
 /* 系统设置：总览单列 + 分组瀑布流 */
 @media (min-width: 1320px) {
-  .gate-panel:has(> .gate-form .system-settings-groups) { grid-template-columns: 1fr; }
-  .gate-panel:has(> .gate-form .system-settings-groups) .gate-panel__copy { text-align: center; }
-  .system-settings-groups { display: block; columns: 2; column-gap: 18px; }
-  .system-settings-group { break-inside: avoid; margin: 0 0 18px; }
+  .gate-panel--system-settings { grid-template-columns: 1fr; }
+  .gate-panel--system-settings .gate-panel__copy { text-align: center; }
+  .system-settings-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 }
 /* 行式设置项：说明左、控件右 */
 @media (min-width: 680px) {
@@ -146,7 +144,7 @@ input, select, textarea { border-radius: var(--field-radius); }
   .system-settings-group__fields > label {
     display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px;
     padding: 10px 4px; border-bottom: 1px solid var(--line); border-radius: 6px;
-    transition: background .15s;
+    transition: var(--console-transition, background .15s);
   }
   .system-settings-group__fields > label:hover { background: color-mix(in srgb, var(--surface-soft) 60%, transparent); }
   .system-settings-group__fields > label:last-child { border-bottom: 0; }
@@ -162,9 +160,8 @@ input, select, textarea { border-radius: var(--field-radius); }
 }
 /* 个人中心：瀑布流错位两栏 + 同步偏好字段自适应两列 */
 @media (min-width: 1200px) {
-  .control-grid:has(#sync-settings) { display: block; columns: 2; column-gap: 18px; }
-  .control-grid:has(#sync-settings) > article { break-inside: avoid; margin: 0 0 18px; }
-  .control-grid:has(#sync-settings) > .ledger-panel { column-span: all; margin-bottom: 18px; }
+  .control-grid--account { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .control-grid--account > .ledger-panel { grid-column: 1 / -1; }
   #sync-settings .gate-form { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 16px; }
   #sync-settings .gate-form > .button--primary { grid-column: 1 / -1; }
   #sync-settings .gate-form > small { grid-column: 1 / -1; }

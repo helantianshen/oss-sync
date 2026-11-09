@@ -163,7 +163,10 @@
     $$('[data-setting]').forEach((control) => {
       const name = control.dataset.setting;
       if (!Object.hasOwn(settings, name)) return;
-      if (control.type === 'radio') control.checked = control.value === String(settings[name]);
+      if (control.type === 'radio') {
+        control.checked = control.value === String(settings[name]);
+        control.closest('label')?.classList.toggle('is-selected', control.checked);
+      }
       else if (control.type === 'checkbox') control.checked = settings[name] === true;
       else if (control.tagName === 'BUTTON') {
         const selected = control.value === String(settings[name]);
@@ -308,7 +311,8 @@
     const filterStatus = $('#filter-status');
     const active = [filters.category && `分类：${filters.category}`, filters.tag && `标签：${filters.tag}`, filters.date && `日期：${filters.date}`].filter(Boolean);
     if (filterStatus) { filterStatus.textContent = active.length ? `${active.join(' · ')} · ${matching.length} 篇文章` : `共 ${matching.length} 篇文章`; }
-    const clear = $('#clear-filter'); if (clear) clear.hidden = active.length === 0;
+    const filterBar = $('#clear-filter')?.closest('.filter-bar');
+    if (filterBar) filterBar.hidden = active.length === 0;
     $$('button[data-category], button[data-tag]').forEach((control) => {
       const key = control.hasAttribute('data-category') ? 'category' : 'tag';
       const selected = filters[key] === control.dataset[key];

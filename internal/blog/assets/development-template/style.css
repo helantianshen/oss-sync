@@ -5,7 +5,7 @@
   --rule: #c4cec6;
   --signal: #0b7567;
   --accent: #cc654d;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -16,7 +16,7 @@ a { color: var(--signal); text-underline-offset: .18em; }
   display: flex; justify-content: space-between; gap: 24px; align-items: baseline;
   padding: 30px 0 18px; border-bottom: 1px solid var(--ink);
 }
-.site-mark { color: var(--ink); font: 800 13px/1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .12em; text-decoration: none; }
+.site-mark { color: var(--ink); font: 800 13px/1 "Cascadia Mono", monospace; letter-spacing: .12em; text-decoration: none; }
 .site-caption { color: var(--muted); font-size: 12px; }
 .reading-room { width: min(740px, 100%); min-height: 72vh; padding: clamp(46px, 8vw, 100px) 0 70px; }
 .entry > :first-child, .index-card h1 { margin-top: 0; }
@@ -26,7 +26,7 @@ a { color: var(--signal); text-underline-offset: .18em; }
 .entry blockquote { margin: 2em 0; padding: 4px 0 4px 24px; border-left: 4px solid var(--accent); color: var(--muted); }
 .entry pre { overflow-x: auto; padding: 18px; color: #e9f2ef; background: var(--ink); border-radius: 2px; }
 .entry img { max-width: 100%; height: auto; border: 1px solid var(--rule); }
-.kicker { color: var(--accent); font: 800 11px/1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .13em; text-transform: uppercase; }
+.kicker { color: var(--accent); font: 800 11px/1 "Cascadia Mono", monospace; letter-spacing: .13em; text-transform: uppercase; }
 .oss-tree { padding-left: 1.25em; }
 .oss-tree li { margin: .55em 0; }
 .notice { padding: 14px 17px; border-left: 4px solid var(--accent); background: #ebe3d5; }
