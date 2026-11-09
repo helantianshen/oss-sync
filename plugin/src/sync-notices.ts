@@ -2,26 +2,29 @@
 export type TransferNotice =
   | { readonly kind: "uploaded"; readonly path?: string; readonly count?: number }
   | { readonly kind: "downloaded"; readonly path?: string; readonly count?: number }
+  | { readonly kind: "deltaSynced"; readonly path?: string; readonly count?: number }
   | { readonly kind: "failed"; readonly path: string };
 
-/** 生成传输通知；三类合计超过阈值时上传与下载改为按数量提示，失败始终逐条提示 */
+/** 传输数量超过阈值时合并成功提示，失败仍逐条显示。 */
 export function buildTransferNoticePlan(
   uploaded: readonly string[],
   downloaded: readonly string[],
+  deltaSynced: readonly string[],
   failed: readonly string[],
   aggregateThreshold = 5,
 ): readonly TransferNotice[] {
   const notices: TransferNotice[] = [];
-  const aggregate = uploaded.length + downloaded.length + failed.length > aggregateThreshold;
+  const aggregate = uploaded.length + downloaded.length + deltaSynced.length + failed.length > aggregateThreshold;
   appendTransferNotices(notices, "uploaded", uploaded, aggregate);
   appendTransferNotices(notices, "downloaded", downloaded, aggregate);
+  appendTransferNotices(notices, "deltaSynced", deltaSynced, aggregate);
   for (const path of failed) notices.push({ kind: "failed", path });
   return notices;
 }
 
 function appendTransferNotices(
   notices: TransferNotice[],
-  kind: "uploaded" | "downloaded",
+  kind: "uploaded" | "downloaded" | "deltaSynced",
   paths: readonly string[],
   aggregate: boolean,
 ): void {

@@ -9,7 +9,7 @@ export type ExpectedLocalState =
 
 /** 动作执行结果；deferred_retry 表示本轮放弃，留给下一轮同步重试 */
 export type OrdinarySyncActionOutcome =
-  | { readonly kind: "resolved" }
+  | { readonly kind: "resolved"; readonly transfer?: "full" | "delta" }
   | { readonly kind: "conflicted" }
   | {
       readonly kind: "deferred_retry";
@@ -97,6 +97,7 @@ export type OrdinarySyncPlanResult = {
 /** 规划器输入；remote 仅在完整快照或本地有基线时可信，故以 forceFull 区分 */
 export type OrdinarySyncPlannerInput = {
   readonly configDir: string;
+  readonly autoConfigurationTimeOffset?: number;
   readonly forceFull: boolean;
   readonly recoverySnapshot: boolean;
   readonly remote: ReadonlyMap<string, SyncFileMeta>;

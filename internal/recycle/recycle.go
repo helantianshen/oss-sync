@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -64,6 +65,10 @@ func CheckRestorable(db *gorm.DB, file models.File, now time.Time) error {
 // Key 返回某 File 在回收站中的存储键
 func Key(vaultID string, fileID uint) string {
 	return filepath.ToSlash(filepath.Join("vaults", vaultID, "recycle", strconv.FormatUint(uint64(fileID), 10)))
+}
+
+func IsStorageKey(vaultID, key string) bool {
+	return vaultID != "" && strings.HasPrefix(filepath.ToSlash(key), "vaults/"+vaultID+"/recycle/")
 }
 
 // DiskPath 返回回收站正文的绝对路径

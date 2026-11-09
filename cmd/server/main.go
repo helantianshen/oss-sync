@@ -117,6 +117,7 @@ func main() {
 	}
 
 	sched := cron.NewScheduler(db, cfg)
+	sched.SetBackups(srv.Backups)
 	sched.Register()
 	if err := pluginManager.RegisterTasks(sched); err != nil {
 		log.Printf("[OSS] 注册插件任务失败: %v", err)

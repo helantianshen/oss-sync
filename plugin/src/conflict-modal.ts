@@ -1,6 +1,5 @@
-import { App, Modal, Notice, Setting, TFile } from "obsidian";
+import { App, Modal, Notice, Setting } from "obsidian";
 import type OSSPlugin from "./main";
-import type { OSSApiClient } from "./api";
 import { buildConflictDiff, LineCapacityExceededError } from "./conflict-diff";
 import {
   buildMergeRegions,
@@ -25,11 +24,11 @@ export class ConflictModal extends Modal {
   constructor(
     app: App,
     private plugin: OSSPlugin,
-    private api: OSSApiClient,
-    private file: TFile,
+    private path: string,
+    private readLocal: () => Promise<string>,
     remoteContent: string,
     private onResolved: (r: ConflictResolution) => Promise<void>,
-    private readonly options: { baseText?: string | null; onClose?: () => void; binary?: boolean } = {},
+    private readonly options: { baseText?: string | null; onClose?: () => void; binary?: boolean; localMissing?: boolean } = {},
   ) {
     super(app);
     this.remoteContent = remoteContent;
@@ -39,7 +38,7 @@ export class ConflictModal extends Modal {
     const { contentEl, titleEl } = this;
     this.modalEl.addClass("oss-conflict-modal");
     titleEl.empty();
-    appendTextWithPathBreaks(titleEl, this.plugin.t("conflict.title", { path: this.file.path }));
+    appendTextWithPathBreaks(titleEl, this.plugin.t("conflict.title", { path: this.path }));
 
     if (this.options.binary) {
       contentEl.createDiv({ text: this.plugin.t("conflict.binaryDescription") });
@@ -48,7 +47,7 @@ export class ConflictModal extends Modal {
     }
 
     const preview = contentEl.createDiv({ cls: "oss-diff-preview" });
-    const localContent = await this.app.vault.read(this.file);
+    const localContent = await this.readLocal();
     let orderedRegions: MergeRegion[] | null = null;
     let orderedOrders: BlockOrder[] = [];
     let finalPreviewEl: HTMLElement | null = null;
@@ -164,12 +163,14 @@ export class ConflictModal extends Modal {
         b.setButtonText(this.plugin.t("conflict.forceLocalButton")).setWarning().onClick(() => this.resolve("force_local"))
       );
 
-    new Setting(contentEl)
-      .setName(this.plugin.t("conflict.keepBoth"))
-      .setDesc(this.plugin.t("conflict.keepBothDesc"))
-      .addButton((b) =>
-        b.setButtonText(this.plugin.t("conflict.keepBothButton")).onClick(() => this.resolve("keep_both"))
-      );
+    if (!this.options.localMissing) {
+      new Setting(contentEl)
+        .setName(this.plugin.t("conflict.keepBoth"))
+        .setDesc(this.plugin.t("conflict.keepBothDesc"))
+        .addButton((b) =>
+          b.setButtonText(this.plugin.t("conflict.keepBothButton")).onClick(() => this.resolve("keep_both"))
+        );
+    }
 
     new Setting(contentEl)
       .addButton((b) =>

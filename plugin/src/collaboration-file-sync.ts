@@ -65,18 +65,24 @@ export class CollaborationFileSync {
 
   constructor(private readonly deps: CollaborationFileSyncDeps) {}
 
-/** 本地协作文件被编辑后防抖上传；非协作路径与抑制窗口内的编辑被忽略 */
+  /** 本地协作文件被编辑后防抖上传；非协作路径与抑制窗口内的编辑被忽略 */
   handleLocalEdit(path: string): void {
     if (!isCollabPath(path)) return;
     const key = normalizePath(path);
     if (this.deps.vault.isSuppressed(key)) return;
     const existing = this.timers.get(key);
     if (existing !== undefined) window.clearTimeout(existing);
-    const timer = window.setTimeout(() => {
-      this.timers.delete(key);
-      void this.deps.coordinator.run(() => this.doUpload(key));
-    }, UPLOAD_DEBOUNCE_MS);
+    const timer = window.setTimeout(() => this.flushLocalEdit(key), UPLOAD_DEBOUNCE_MS);
     this.timers.set(key, timer);
+  }
+
+  flushLocalEdit(path: string): void {
+    const key = normalizePath(path);
+    const timer = this.timers.get(key);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    this.timers.delete(key);
+    void this.deps.coordinator.run(() => this.doUpload(key));
   }
 
   /** 取消全部待执行上传并清除抑制状态 */

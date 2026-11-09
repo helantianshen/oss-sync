@@ -18,6 +18,7 @@ import (
 	"github.com/helantianshen/oss-sync/internal/config"
 	"github.com/helantianshen/oss-sync/internal/filestore"
 	"github.com/helantianshen/oss-sync/internal/models"
+	"github.com/helantianshen/oss-sync/internal/recycle"
 	"github.com/helantianshen/oss-sync/internal/synclock"
 )
 
@@ -105,6 +106,17 @@ func (r *Reconciler) reconcileVault(
 	for _, file := range files {
 		known[filepath.Clean(filestore.DiskPath(r.Cfg.Storage.DataDir, file))] = file
 	}
+	var historyKeys []string
+	if err := r.DB.Model(&models.FileHistory{}).Where("vault_id = ? AND content_key <> ''", vault.ID).
+		Distinct().Pluck("content_key", &historyKeys).Error; err != nil {
+		return err
+	}
+	historyPrefix := "vaults/" + vault.ID + "/history/"
+	for _, key := range historyKeys {
+		if strings.HasPrefix(key, historyPrefix) && filepath.IsLocal(filepath.FromSlash(key)) {
+			known[filepath.Join(r.Cfg.Storage.DataDir, filepath.FromSlash(key))] = models.File{}
+		}
+	}
 
 	vaultRoot := filepath.Join(r.Cfg.Storage.DataDir, "vaults", vault.ID)
 	entries, err := scanVault(vaultRoot)
@@ -121,6 +133,9 @@ func (r *Reconciler) reconcileVault(
 		}
 		expected := filepath.Clean(filestore.DiskPath(r.Cfg.Storage.DataDir, file))
 		for path := range entries {
+			if path == expected && recycle.IsStorageKey(vault.ID, file.StorageKey) {
+				continue
+			}
 			if path != expected && !strings.HasPrefix(path, expected+".backup") {
 				continue
 			}

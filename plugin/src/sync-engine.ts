@@ -9,7 +9,7 @@ import {
   type ConflictEntry,
   type PendingOperation,
 } from "./baseline.js";
-import { shouldSync, classifySyncPath } from "./blacklist.js";
+import { buildSyncPathFilter, shouldSync, classifySyncPath, configurationRelativePath, type SyncPathRules } from "./blacklist.js";
 import type { ConflictResolution } from "./conflict-modal.js";
 import type { Diagnostics } from "./diagnostics.js";
 import { diagnosticErrorDetails } from "./diagnostic-report";
@@ -74,6 +74,10 @@ export class SyncEngine {
   private localCheckTimer: number | null = null;
   private localDiscoveryReady = false;
   private lastContentCheck = 0;
+  private pathScope?: SyncPathRules & { configDir: string; key: string; allows: (path: string) => boolean };
+  private completedPathScope?: { key: string; allows: (path: string) => boolean };
+  private configurationFiles = new Map<string, { mtime: number; size: number }>();
+  private configurationSnapshotNeeded = false;
   private started = false;
   private stopped = false;
   private effectiveMode: "short_poll" | "long_poll" = "short_poll";
@@ -137,13 +141,23 @@ export class SyncEngine {
     await this.enqueueChain;
   }
 
+  /** 正文离开焦点时，等该文件入队后立即发起一轮增量同步。 */
+  async flushFile(path: string): Promise<void> {
+    await this.enqueueChain;
+    if (!this.started || !this.api.hasToken() || !this.plugin.settings.vaultId || !this.isSyncPath(path)) return;
+    const pending = this.baseline.pending().find((operation) => operation.path === path && operation.kind !== "delete");
+    if (!pending || this.baseline.getConflict(path) || (pending.oldPath && this.baseline.getConflict(pending.oldPath))) return;
+    this.debounceFn.cancel();
+    await this.runOnce({ forceFull: false });
+  }
+
   /** 重建轮询：无令牌或未绑定 vault 时不启动，长轮询模式下直接进入长轮询 */
   resetPolling(): void {
     this.stopCurrentPolling();
     if (this.stopped || !this.plugin.settings.vaultId || !this.api.hasToken()) return;
     this.localCheckTimer = window.setInterval(() => {
       if (!this.stopped) void this.runOnce({ forceFull: false });
-    }, 60_000);
+    }, this.effectiveMode === "long_poll" && this.plugin.settings.syncConfiguration ? 5_000 : 60_000);
     if (this.effectiveMode === "long_poll") return this.startLongPoll();
     const seconds = Math.max(3, this.plugin.settings.remotePollIntervalSec);
     this.pollTimer = window.setInterval(() => {
@@ -283,7 +297,7 @@ export class SyncEngine {
         if (operation.oldPath?.startsWith(prefix)) paths.add(operation.oldPath);
       }
       for (const path of paths) {
-        if (shouldSync(path, this.vault.configDir)) {
+        if (this.isSyncPath(path)) {
           this.baseline.putPending({ id: operationID(), kind: "delete", path, createdAt: Date.now() });
         }
       }
@@ -318,8 +332,8 @@ export class SyncEngine {
         this.recordDiscovery("collaboration_boundary", 1);
         continue;
       }
-      const from = shouldSync(oldPath, this.vault.configDir);
-      const to = shouldSync(path, this.vault.configDir);
+      const from = this.isSyncPath(oldPath);
+      const to = this.isSyncPath(path);
       if (!from && !to) continue;
       operations.push({ id: operationID(), kind: from && to ? "rename" : from ? "delete" : "upsert", path: to ? path : oldPath, oldPath: from && to ? oldPath : undefined, createdAt: Date.now() });
     }
@@ -341,11 +355,11 @@ export class SyncEngine {
    * 入队失败仅提示，不让后续本地事件因一次持久化失败而丢失
    */
   private enqueue(operation: PendingOperation): void {
-    if (!shouldSync(operation.path, this.vault.configDir)) {
+    if (!this.isSyncPath(operation.path)) {
       this.recordDiscovery("event_filtered", 1, operation.id);
       return;
     }
-    if (operation.oldPath && !shouldSync(operation.oldPath, this.vault.configDir)) return;
+    if (operation.oldPath && !this.isSyncPath(operation.oldPath)) return;
     if (this.isSuppressed(operation.path) || (operation.oldPath !== undefined && this.isSuppressed(operation.oldPath))) {
       this.recordDiscovery("event_suppressed", 1, operation.id);
       return;
@@ -398,8 +412,9 @@ export class SyncEngine {
     try {
       await this.applyStrategy();
       await this.baseline.load();
+      const pathScope = this.currentPathScope();
       for (const operation of this.baseline.pending()) {
-        if (!shouldSync(operation.path, this.vault.configDir) || operation.oldPath && !shouldSync(operation.oldPath, this.vault.configDir)) {
+        if (!this.isSyncPath(operation.path) || operation.oldPath && !this.isSyncPath(operation.oldPath)) {
           this.baseline.removePending(operation.id);
         }
       }
@@ -421,16 +436,25 @@ export class SyncEngine {
           pendingCount: pendingAtStart.length,
         });
       }
-      let full = forceFull || !this.plugin.settings.incrementalCheck;
+      let full = forceFull || !this.plugin.settings.incrementalCheck || this.completedPathScope?.key !== pathScope.key;
       // 首次绑定或切换 vault 时基线为空，必须全量对齐后才能安全做增量
       if (this.baseline.bindVault(vaultID)) {
         full = true;
         await this.baseline.save();
       }
-      await this.discoverLocalChanges(forceFull || Date.now() - this.lastContentCheck >= 600_000);
+      const configurationConflicts = this.baseline.conflicts().filter(({ path }) =>
+        this.usesAutomaticConfiguration(path) && this.isSyncPath(path));
+      if (configurationConflicts.length) this.configurationSnapshotNeeded = true;
+      full ||= this.configurationSnapshotNeeded;
+      this.splitConfigurationRenames();
+      this.configurationFiles = await this.scanConfigurationFiles();
+      await this.discoverLocalChanges(full || Date.now() - this.lastContentCheck >= 600_000);
       // 待办删除但基线无对应条目，说明该文件从未同步过，只有全量快照能判断远端是否已不存在
       if (this.needsFullSnapshotForDeletes(this.baseline.pending())) full = true;
       const remote = await this.fetchRemote(vaultID, full);
+      for (const { path } of configurationConflicts) {
+        if (this.usesAutomaticConfiguration(path)) this.baseline.removeConflict(path);
+      }
       let pending = this.baseline.pending();
       this.diagnostics?.record({
         kind: "sync_run",
@@ -485,6 +509,8 @@ export class SyncEngine {
       await this.api.acknowledge(vaultID, remote.nextCursor);
       this.baseline.setCursor(remote.nextCursor);
       await this.baseline.save();
+      this.completedPathScope = pathScope;
+      this.configurationSnapshotNeeded = false;
       this.diagnostics?.record({
         kind: "sync_run",
         at: Date.now(),
@@ -543,14 +569,19 @@ export class SyncEngine {
   ): void {
     const uploaded: string[] = [];
     const downloaded: string[] = [];
+    const deltaSynced: string[] = [];
     const failed: string[] = [];
     for (const [index, action] of actions.entries()) {
       const result = results[index];
-      const resolved = result?.ok === true && result.result?.kind === "resolved";
-      if (!resolved) {
+      if (result?.ok !== true || result.result?.kind !== "resolved") {
         failed.push(action.path);
         continue;
       }
+      if (result.result.transfer === "delta") {
+        deltaSynced.push(action.path);
+        continue;
+      }
+      if (result.result.transfer !== "full") continue;
       switch (action.kind) {
         case "upload":
           uploaded.push(action.path);
@@ -562,7 +593,7 @@ export class SyncEngine {
           break;
       }
     }
-    for (const notice of buildTransferNoticePlan(uploaded, downloaded, failed)) {
+    for (const notice of buildTransferNoticePlan(uploaded, downloaded, deltaSynced, failed)) {
       this.showTransferNotice(notice);
     }
   }
@@ -575,6 +606,9 @@ export class SyncEngine {
         break;
       case "downloaded":
         new Notice(this.plugin.t(notice.count === undefined ? "sync.downloaded" : "sync.downloadedMany", notice));
+        break;
+      case "deltaSynced":
+        new Notice(this.plugin.t(notice.count === undefined ? "sync.deltaSynced" : "sync.deltaSyncedMany", notice));
         break;
       case "failed":
         new Notice(this.plugin.t("notice.syncFileFailed", notice), 6000);
@@ -607,7 +641,10 @@ export class SyncEngine {
         throw error;
       }
       for (const file of page.files) {
-        if (shouldSync(file.path, this.vault.configDir)) files.set(normalizePath(file.path), file);
+        const path = normalizePath(file.path);
+        const configuration = configurationRelativePath(path, this.vault.configDir) !== null;
+        if (file.type === "config" && !configuration) continue;
+        if (this.isSyncPath(path)) files.set(path, configuration ? { ...file, path, type: "config" } : file);
       }
       recoverySnapshot = recoverySnapshot || page.recovery_snapshot;
       cursor = page.next_cursor;
@@ -668,7 +705,7 @@ export class SyncEngine {
           baseRevision: oldBaseline.serverRevision,
           targetRevision: newBaseline?.serverRevision ?? 0,
           operationID: operation.id,
-          mtime: local.mtime,
+          mtime: this.syncMtime(operation.path, local.mtime),
         });
         remote.set(operation.oldPath, result.old);
         this.recordDiscovery("rename_applied", 1, operation.id);
@@ -726,10 +763,18 @@ export class SyncEngine {
     const conflicts = new Set(candidates.filter((path) => this.baseline.getConflict(path) !== null));
     const localByPath = new Map<string, OrdinarySyncLocalMeta | null>();
     for (const path of ordinarySyncCandidatePaths({ forceFull, remote, baseline, pending, conflicts, vaultPaths })) {
-      localByPath.set(path, await this.readLocalMeta(path));
+      const local = await this.readLocalMeta(path);
+      localByPath.set(path, local);
+      // 路径重新纳入同步时，缺少本地副本应补下载，不能视为删除了服务器正文。
+      if (!local && this.completedPathScope?.allows(path) === false &&
+          remote.get(path)?.deleted === false && !pending.some((operation) => operation.path === path && operation.kind === "delete")) {
+        baseline.delete(path);
+      }
     }
     return planOrdinarySyncActions({
       configDir: this.vault.configDir,
+      autoConfigurationTimeOffset: this.plugin.settings.syncConfiguration && this.plugin.settings.autoResolveConfiguration
+        ? this.api.getTimeOffset() : undefined,
       forceFull,
       recoverySnapshot,
       remote,
@@ -752,7 +797,7 @@ export class SyncEngine {
     const entries = new Map<string, BaselineEntry>();
     for (const path of this.baseline.paths()) {
       const entry = this.baseline.get(path);
-      if (entry && shouldSync(path, this.vault.configDir)) entries.set(path, entry);
+      if (entry && this.isSyncPath(path)) entries.set(path, entry);
     }
     return entries;
   }
@@ -760,9 +805,74 @@ export class SyncEngine {
   /** 全量模式下返回参与同步的本地文件清单，增量模式下为空集由规划器自行推导 */
   private vaultPaths(forceFull: boolean): readonly string[] {
     if (!forceFull) return [];
-    return this.vault.getFiles()
-      .filter((file) => shouldSync(file.path, this.vault.configDir))
-      .map((file) => normalizePath(file.path));
+    return [...this.vault.getFiles()
+      .filter((file) => this.isSyncPath(file.path))
+      .map((file) => normalizePath(file.path)), ...this.configurationFiles.keys()];
+  }
+
+  private currentPathScope(): { key: string; allows: (path: string) => boolean } {
+    const { syncConfiguration, syncCommunityPlugins, syncExclusions, syncWhitelist } = this.plugin.settings;
+    const configDir = this.vault.configDir;
+    const ownPluginDir = normalizePath(this.plugin.manifest?.dir ?? "").replace(/\/+$/, "");
+    if (this.pathScope?.configDir === configDir && this.pathScope.syncConfiguration === syncConfiguration &&
+        this.pathScope.syncCommunityPlugins === syncCommunityPlugins && this.pathScope.ownPluginDir === ownPluginDir &&
+        this.pathScope.syncExclusions === syncExclusions && this.pathScope.syncWhitelist === syncWhitelist) return this.pathScope;
+    const rules = { syncConfiguration, syncCommunityPlugins, ownPluginDir, syncExclusions, syncWhitelist };
+    this.pathScope = { ...rules, configDir, key: JSON.stringify([configDir, rules]), allows: buildSyncPathFilter(configDir, rules) };
+    return this.pathScope;
+  }
+
+  private isSyncPath(path: string): boolean {
+    return this.currentPathScope().allows(path);
+  }
+
+  private usesAutomaticConfiguration(path: string): boolean {
+    return this.plugin.settings.syncConfiguration && this.plugin.settings.autoResolveConfiguration &&
+      configurationRelativePath(path, this.vault.configDir) !== null;
+  }
+
+  private syncMtime(path: string, mtime: number): number {
+    return configurationRelativePath(path, this.vault.configDir) !== null ? Math.trunc(this.api.getAdjustedMtime(mtime)) : mtime;
+  }
+
+  /** 配置改名按两个路径同步，先确认新路径的内容，再删除旧路径。 */
+  private splitConfigurationRenames(): void {
+    for (const operation of this.baseline.pending()) {
+      if (operation.kind !== "rename" || !operation.oldPath ||
+          ![operation.oldPath, operation.path].some((path) => this.usesAutomaticConfiguration(path))) continue;
+      this.baseline.removePending(operation.id);
+      this.baseline.putPending({ ...operation, kind: "upsert", oldPath: undefined });
+      this.baseline.putPending({
+        id: operationID(), kind: "delete", path: operation.oldPath, createdAt: operation.createdAt,
+        source: "scan", waitForPaths: [operation.path],
+      });
+    }
+  }
+
+  private async scanConfigurationFiles(): Promise<Map<string, { mtime: number; size: number }>> {
+    const files = new Map<string, { mtime: number; size: number }>();
+    if (!this.plugin.settings.syncConfiguration) return files;
+    const root = normalizePath(this.vault.configDir);
+    const adapter = this.vault.adapter;
+    if (!root || (await adapter.stat(root))?.type !== "folder") return files;
+    const folders = [root];
+    const plugins = `${root}/plugins`;
+    while (folders.length) {
+      const folder = folders.pop()!;
+      const entries = await adapter.list(folder);
+      for (const file of entries.files.map(normalizePath)) {
+        if (!this.isSyncPath(file)) continue;
+        const stat = await adapter.stat(file);
+        if (stat?.type === "file") files.set(file, stat);
+      }
+      for (const child of entries.folders.map(normalizePath)) {
+        if (child === `${root}/snippets` || child === `${root}/themes` || folder === `${root}/themes` ||
+            this.plugin.settings.syncCommunityPlugins && (child === plugins || folder === plugins)) {
+          folders.push(child);
+        }
+      }
+    }
+    return files;
   }
 
   /** 只记录事件类别与数量，诊断不包含用户路径或正文 */
@@ -773,7 +883,7 @@ export class SyncEngine {
   /** 对照磁盘与 Vault 索引检查可见文件，索引尚未收敛时禁止推导删除 */
   private async indexedLocalPaths(): Promise<Set<string>> {
     const indexed = new Set(this.vault.getFiles().map((file) => normalizePath(file.path))
-      .filter((path) => shouldSync(path, this.vault.configDir)));
+      .filter((path) => this.isSyncPath(path)));
     const disk = new Set<string>();
     const folders = [""];
     while (folders.length > 0) {
@@ -781,7 +891,7 @@ export class SyncEngine {
       const entries = await this.vault.adapter.list(folder);
       for (const path of entries.files.map(normalizePath)) {
         if (path.split("/").some((part) => part.startsWith("."))) continue;
-        if (shouldSync(path, this.vault.configDir)) disk.add(path);
+        if (this.isSyncPath(path)) disk.add(path);
       }
       for (const path of entries.folders.map(normalizePath)) {
         if (path.split("/").some((part) => part.startsWith("."))) continue;
@@ -793,6 +903,7 @@ export class SyncEngine {
     if (visible.some((path) => !disk.has(path)) || [...disk].some((path) => !indexed.has(path))) {
       throw new Error("Vault index is not ready for local reconciliation");
     }
+    for (const path of this.configurationFiles.keys()) indexed.add(path);
     return indexed;
   }
 
@@ -809,8 +920,8 @@ export class SyncEngine {
         const base = this.baseline.get(path);
         const operation = pendingByPath.get(path);
         return base && !base.serverDeleted && base.localHash && !paths.has(path) && !this.baseline.getConflict(path)
-          && !path.split("/").some((part) => part.startsWith("."))
-          && shouldSync(path, this.vault.configDir)
+          && (configurationRelativePath(path, this.vault.configDir) !== null || !path.split("/").some((part) => part.startsWith(".")))
+          && this.isSyncPath(path) && this.completedPathScope?.allows(path) !== false
           && (!occupied.has(path) || operation?.kind === "delete" && operation.source === "scan");
       });
       // 缺失源可能覆盖已有目标，必须检查正文后才能安全规划源删除
@@ -825,7 +936,8 @@ export class SyncEngine {
       for (const path of paths) {
         if (occupied.has(path) || this.baseline.getConflict(path)) continue;
         const base = this.baseline.get(path);
-        if (!base || base.serverDeleted || content) {
+        const config = this.configurationFiles.get(path);
+        if (!base || base.serverDeleted || content || config && (config.mtime !== base.localMTime || config.size !== base.localSize)) {
           const local = await this.readLocalMeta(path);
           if (!local) throw new Error("Local file changed during reconciliation");
           if (!base || base.serverDeleted || local.hash !== base.serverHash) {
@@ -894,6 +1006,7 @@ export class SyncEngine {
    * 409 冲突转由冲突处理器结算，其余异常上抛给 TaskPool 记为该动作失败
    */
   private async applyAction(vaultID: string, action: OrdinarySyncAction): Promise<OrdinarySyncActionOutcome> {
+    if (!this.isSyncPath(action.path)) return { kind: "resolved" };
     try {
       switch (action.kind) {
         case "upload": return await this.applyUpload(vaultID, action);
@@ -915,6 +1028,10 @@ export class SyncEngine {
   /** 上传遇 409 走冲突解决器，其余动作直接按远端当前版本登记冲突 */
   private async handleActionFailure(vaultID: string, action: OrdinarySyncAction, error: unknown): Promise<OrdinarySyncActionOutcome> {
     if (!isOrdinarySyncConflict409(error)) throw error;
+    if (this.usesAutomaticConfiguration(action.path)) {
+      this.configurationSnapshotNeeded = true;
+      return { kind: "deferred_retry", reason: "second_conflict" };
+    }
     if (action.kind === "upload") {
       return this.createResolver().resolve({ vaultId: vaultID, path: action.path, expectedHash: action.local.hash, remote: error.current });
     }
@@ -930,13 +1047,16 @@ export class SyncEngine {
   private async applyUpload(vaultID: string, action: Extract<OrdinarySyncAction, { readonly kind: "upload" }>): Promise<OrdinarySyncActionOutcome> {
     const snapshot = await this.ordinaryFileAccess.readExact(action.path);
     if (!snapshot || snapshot.hash !== action.local.hash) return { kind: "deferred_retry", reason: "stale_local" };
+    const base = this.baseline.get(action.path);
     const server = await this.api.uploadV2(vaultID, {
       path: action.path,
       baseRevision: action.baseRevision,
       hash: snapshot.hash,
-      mtime: snapshot.mtime,
+      mtime: this.syncMtime(action.path, snapshot.mtime),
       operationID: action.operationID,
       content: toArrayBuffer(snapshot.bytes),
+      deltaBaseHash: base?.serverRevision === action.baseRevision && !base.serverDeleted &&
+        action.path.toLowerCase().endsWith(".md") ? base.serverHash : undefined,
     });
     const current = await this.ordinaryFileAccess.readExact(action.path);
     this.baseline.set(action.path, server.deleted
@@ -944,7 +1064,12 @@ export class SyncEngine {
       : await this.liveAcknowledgement({ path: action.path, server, local: current, bytes: snapshot.bytes, bytesHash: snapshot.hash }));
     if (action.operation) this.baseline.removePending(action.operation.id);
     this.queueCurrentLocalChange(action.path, snapshot, current);
-    return { kind: "resolved" };
+    if (this.usesAutomaticConfiguration(action.path) && current?.hash === snapshot.hash &&
+        (server.deleted || server.hash !== snapshot.hash)) {
+      this.baseline.putPending({ id: operationID(), kind: "upsert", path: action.path, createdAt: Date.now() });
+    }
+    if (server.deleted || server.hash !== snapshot.hash) return { kind: "resolved" };
+    return { kind: "resolved", transfer: server.usedDelta ? "delta" : "full" };
   }
 
   /** 请求服务端删除；删除后本地又出现同名文件时补一条 upsert 待办，下一轮重新上传 */
@@ -953,11 +1078,12 @@ export class SyncEngine {
       this.recordDiscovery("delete_deferred", 1);
       return { kind: "deferred_retry", reason: "stale_local" };
     }
+    const deletedAt = this.usesAutomaticConfiguration(action.path) ? action.operation?.createdAt ?? Date.now() : Date.now();
     const server = await this.api.deleteV2(vaultID, {
       path: action.path,
       baseRevision: action.baseRevision,
       operationID: action.operationID,
-      mtime: Date.now(),
+      mtime: this.syncMtime(action.path, deletedAt),
     });
     const current = await this.ordinaryFileAccess.readExact(action.path);
     this.baseline.set(action.path, this.deletedAcknowledgement(server, current));
@@ -973,7 +1099,15 @@ export class SyncEngine {
   private async applyDownload(vaultID: string, remote: SyncFileMeta, expected: ExpectedLocalState): Promise<OrdinarySyncActionOutcome> {
     let downloaded;
     try {
-      downloaded = await this.api.downloadV2(vaultID, remote.path, remote.revision);
+      const delta = remote.type === "markdown" && expected.kind === "hash" ? {
+        size: remote.size,
+        hash: remote.hash,
+        readBase: async () => {
+          const local = await this.ordinaryFileAccess.readExact(remote.path);
+          return local?.hash === expected.hash ? local.bytes : null;
+        },
+      } : undefined;
+      downloaded = await this.api.downloadV2(vaultID, remote.path, remote.revision, delta);
     } catch (error) {
       if (!isOrdinarySyncConflict409(error)) throw error;
       return this.conflictOutcome(remote.path, await this.ordinaryFileAccess.readExact(remote.path), error.current);
@@ -984,8 +1118,7 @@ export class SyncEngine {
       ? await this.ordinaryFileAccess.create(remote.path, expected, bytes)
       : await this.ordinaryFileAccess.replace(remote.path, expected, bytes);
     if (write.kind === "stale") {
-      await this.recordConflict(remote.path, write.actual, downloaded.meta);
-      return { kind: "conflicted" };
+      return this.conflictOutcome(remote.path, write.actual, downloaded.meta);
     }
     const snapshot = write.snapshot;
     this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "written", details: { path: remote.path, bytes: bytes.byteLength, revision: downloaded.meta.revision } });
@@ -997,15 +1130,14 @@ export class SyncEngine {
       bytesHash: await sha256Hex(bytes),
     }));
     this.baseline.removePendingForPath(remote.path);
-    return { kind: "resolved" };
+    return { kind: "resolved", transfer: downloaded.usedDelta ? "delta" : "full" };
   }
 
   /** 删除本地文件以镜像远端删除，同样先做 expected 校验，失败转冲突 */
   private async applyRemoteDelete(remote: SyncFileMeta, expected: ExpectedLocalState): Promise<OrdinarySyncActionOutcome> {
     const deleted = await this.ordinaryFileAccess.deleteExact(remote.path, expected);
     if (deleted.kind === "stale") {
-      await this.recordConflict(remote.path, deleted.actual, remote);
-      return { kind: "conflicted" };
+      return this.conflictOutcome(remote.path, deleted.actual, remote);
     }
     const appeared = await this.ordinaryFileAccess.readExact(remote.path);
     this.baseline.set(remote.path, this.deletedAcknowledgement(remote, appeared));
@@ -1022,8 +1154,7 @@ export class SyncEngine {
     const remote = compactedDeleteMeta(action.path, this.vault.configDir);
     const deleted = await this.ordinaryFileAccess.deleteExact(action.path, action.expectedLocal);
     if (deleted.kind === "stale") {
-      await this.recordConflict(action.path, deleted.actual, remote);
-      return { kind: "conflicted" };
+      return this.conflictOutcome(action.path, deleted.actual, remote);
     }
     this.baseline.remove(action.path);
     this.baseline.removePendingForPath(action.path);
@@ -1066,7 +1197,10 @@ export class SyncEngine {
     return new OrdinarySyncConflictResolver({
       baseline: this.baseline,
       fileAccess: this.ordinaryFileAccess,
-      api: this.api,
+      api: {
+        downloadV2: (vaultId, path, revision) => this.api.downloadV2(vaultId, path, revision),
+        uploadV2: (vaultId, input) => this.api.uploadV2(vaultId, { ...input, mtime: this.syncMtime(input.path, input.mtime) }),
+      },
       recordConflict: (path, local, remote) => this.recordConflict(path, local, remote),
       createOperationID: operationID,
       now: () => Date.now(),
@@ -1075,6 +1209,10 @@ export class SyncEngine {
 
   /** 登记冲突并返回 conflicted 结果，供各动作分支统一收敛 */
   private async conflictOutcome(path: string, local: LocalReadResult | null, remote: SyncFileMeta): Promise<OrdinarySyncActionOutcome> {
+    if (this.usesAutomaticConfiguration(path)) {
+      this.configurationSnapshotNeeded = true;
+      return { kind: "deferred_retry", reason: "stale_local" };
+    }
     await this.recordConflict(path, local, remote);
     return { kind: "conflicted" };
   }
@@ -1160,12 +1298,13 @@ export class SyncEngine {
    * 应用用户在冲突窗口选择的解决方案，成功后移除冲突记录
    * 附件在两侧内容一致时走解决器的保留双方路径；有序合并仅适用于文本
    */
-  async resolveConflict(path: string, resolution: ConflictResolution): Promise<void> {
-    if (!shouldSync(path, this.vault.configDir)) throw new Error(this.plugin.t("sync.conflictNotFound"));
+  async resolveConflict(path: string, resolution: ConflictResolution, preview?: { localHash: string; remoteRevision: number }): Promise<void> {
+    if (!this.isSyncPath(path)) throw new Error(this.plugin.t("sync.conflictNotFound"));
     const vaultID = this.plugin.settings.vaultId;
     const conflict = this.baseline.getConflict(path);
     if (!vaultID || !conflict) throw new Error(this.plugin.t("sync.conflictNotFound"));
-    const expected = expectedFromHash(conflict.localHash);
+    if (preview && preview.remoteRevision !== conflict.remoteRevision) throw new Error(this.plugin.t("conflict.orderedStale"));
+    const expected = expectedFromHash(preview?.localHash ?? conflict.localHash);
     let outcome: OrdinarySyncActionOutcome;
     if (resolution === "keep_both" && conflict.remoteType === "attachment" &&
         !conflict.remoteDeleted && conflict.localHash === conflict.remoteHash) {
@@ -1197,7 +1336,7 @@ export class SyncEngine {
           return assertNeverResolution(resolution as never);
       }
     }
-    if (outcome.kind !== "resolved") throw new Error(this.plugin.t("sync.conflictNotFound"));
+    if (outcome.kind !== "resolved") throw new Error(this.plugin.t("conflict.orderedStale"));
     this.baseline.removeConflict(path);
     await this.baseline.save();
   }
@@ -1234,7 +1373,7 @@ export class SyncEngine {
         path: conflict.path,
         baseRevision: conflict.remoteRevision,
         hash: installed.snapshot.hash,
-        mtime: installed.snapshot.mtime,
+        mtime: this.syncMtime(conflict.path, installed.snapshot.mtime),
         operationID: op.id,
         content: mergedBytes.buffer as ArrayBuffer,
       });
@@ -1266,7 +1405,7 @@ export class SyncEngine {
           path: conflict.path,
           baseRevision: conflict.remoteRevision,
           operationID: operationID(),
-          mtime: Date.now(),
+          mtime: this.syncMtime(conflict.path, Date.now()),
         });
         const current = await this.ordinaryFileAccess.readExact(conflict.path);
         this.baseline.set(conflict.path, this.deletedAcknowledgement(server, current));
@@ -1277,7 +1416,7 @@ export class SyncEngine {
         path: conflict.path,
         baseRevision: conflict.remoteRevision,
         hash: local.hash,
-        mtime: local.mtime,
+        mtime: this.syncMtime(conflict.path, local.mtime),
         operationID: operationID(),
         content: toArrayBuffer(local.bytes),
       });
@@ -1325,10 +1464,9 @@ export class SyncEngine {
     return this.baseline.get(path);
   }
 
-  /** 用户忽略该冲突，直接移除记录不改变任何文件内容 */
-  dismissConflict(path: string): void {
-    this.baseline.removeConflict(path);
-    void this.baseline.save();
+  /** 配置目录不在普通 Vault 索引中，冲突预览也通过同步文件访问层读取。 */
+  readConflictLocal(path: string): Promise<LocalReadResult | null> {
+    return this.ordinaryFileAccess.readExact(path);
   }
 
   /** 读取路径的本地元数据，文件不存在时返回 null */

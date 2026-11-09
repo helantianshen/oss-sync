@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/helantianshen/oss-sync/internal/config"
 	"github.com/helantianshen/oss-sync/internal/reconcile"
+	"github.com/helantianshen/oss-sync/internal/serverbackup"
 )
 
 // Scheduler 提供后端周期性任务的注册与生命周期管理
@@ -24,6 +26,19 @@ type Scheduler struct {
 	rc            *reconcile.Reconciler
 	mu            sync.Mutex
 	pluginEntries map[string][]cron.EntryID
+	backups       *serverbackup.Manager
+}
+
+func (s *Scheduler) SetBackups(backups *serverbackup.Manager) { s.backups = backups }
+
+func (s *Scheduler) runMaintenance(task func()) {
+	if s.backups != nil {
+		if !s.backups.TryRead() {
+			return
+		}
+		defer s.backups.EndRead()
+	}
+	task()
 }
 
 // AddPluginTask 向宿主调度器注册受信可执行插件任务
@@ -31,7 +46,7 @@ func (s *Scheduler) AddPluginTask(pluginID, name, schedule string, task func()) 
 	if strings.TrimSpace(schedule) == "" || task == nil {
 		return errors.New("plugin task schedule and callback are required")
 	}
-	entryID, err := s.cron.AddFunc(schedule, task)
+	entryID, err := s.cron.AddFunc(schedule, func() { s.runMaintenance(task) })
 	if err != nil {
 		return fmt.Errorf("add plugin task %s/%s: %w", pluginID, name, err)
 	}
@@ -64,26 +79,38 @@ func NewScheduler(db *gorm.DB, cfg *config.Config) *Scheduler {
 }
 
 func (s *Scheduler) Register() {
+	if s.backups != nil {
+		_, _ = s.cron.AddJob("@every 1m", cron.SkipIfStillRunning(cron.DiscardLogger)(cron.FuncJob(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := s.backups.RunMirrors(ctx); err != nil {
+				log.Printf("[OSS cron] mirror configuration error: %v", err)
+			}
+		})))
+	}
 	spec := "0 3 * * *"
-	_, _ = s.cron.AddFunc(spec, func() {
+	add := func(schedule string, task func()) {
+		_, _ = s.cron.AddFunc(schedule, func() { s.runMaintenance(task) })
+	}
+	add(spec, func() {
 		if err := s.cl.CompactTombstones(); err != nil {
 			log.Printf("[OSS cron] CompactTombstones error: %v", err)
 		}
 	})
 	reconcileSpec := fmt.Sprintf("@every %dh", s.cl.Cfg.Sync.EffectiveReconcileIntervalHours())
-	_, _ = s.cron.AddFunc(reconcileSpec, func() {
+	add(reconcileSpec, func() {
 		_, err := s.rc.Run(false)
 		if err != nil {
 			log.Printf("[OSS cron] storage reconciliation error: %v", err)
 			return
 		}
 	})
-	_, _ = s.cron.AddFunc(spec, func() {
+	add(spec, func() {
 		if err := s.cl.PurgeOrphanAttachments(); err != nil {
 			log.Printf("[OSS cron] PurgeOrphanAttachments error: %v", err)
 		}
 	})
-	_, _ = s.cron.AddFunc(spec, func() {
+	add(spec, func() {
 		if err := s.cl.PurgeExpiredHistory(); err != nil {
 			log.Printf("[OSS cron] PurgeExpiredHistory error: %v", err)
 		}

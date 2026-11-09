@@ -23,6 +23,8 @@ export { COLLAB_DIR, collabLocalPath, isCollabPath };
 /** 协作管理入口：编排文件同步、远端同步与事件传输 */
 export class CollabManager {
   private collabs: CollabEntry[] = [];
+  private presenceSupported = false;
+  private readPresenceSupported = false;
   private readonly vaultAccess: CollaborationFileVault;
   private readonly fileSync: CollaborationFileSync;
   private readonly remoteSync: CollaborationRemoteSync;
@@ -85,6 +87,8 @@ export class CollabManager {
     this.transport.stop();
     this.fileSync.stop();
     this.loadNotices.reset();
+    this.presenceSupported = false;
+    this.readPresenceSupported = false;
   }
 
   /** 事件传输是否在运行 */
@@ -114,6 +118,20 @@ export class CollabManager {
     return this.collabs;
   }
 
+  /** 原文件和协作者本地副本都定位到同一个服务端文件。 */
+  getCursorTarget(path: string): { vaultID: string; fileID: number; canReadOnly: boolean } | null {
+    if (!this.presenceSupported || !this.isRunning() || !this.api.hasToken()) return null;
+    const normalized = normalizePath(path);
+    for (const entry of this.collabs) {
+      if (entry.status !== "accepted") continue;
+      const matches = entry.collaborator_username === this.plugin.settings.username
+        ? normalized === collabLocalPath(entry.owner_username, entry.file_path)
+        : entry.vault_id === this.plugin.settings.vaultId && normalized === entry.file_path;
+      if (matches) return { vaultID: entry.vault_id, fileID: entry.file_id, canReadOnly: this.readPresenceSupported };
+    }
+    return null;
+  }
+
   /** 定位本地路径对应的服务端仓库与文件路径；协作文件不可从普通历史接口恢复 */
   getHistoryTarget(path: string): { vaultID: string; path: string; canRestore: boolean } | null {
     const normalized = normalizePath(path);
@@ -130,6 +148,8 @@ export class CollabManager {
     const vaultID = this.plugin.settings.vaultId;
     if (!this.api.hasToken() || !vaultID) {
       this.collabs = [];
+      this.presenceSupported = false;
+      this.readPresenceSupported = false;
       this.onChange();
       return;
     }
@@ -163,6 +183,8 @@ export class CollabManager {
         for (const entry of vaultResult.collaborations) consider(entry);
         for (const entry of inboxResult.collaborations) consider(entry);
         this.collabs = [...deduped.values()];
+        this.presenceSupported = vaultResult.presence_v1 === true;
+        this.readPresenceSupported = vaultResult.presence_read_v1 === true;
         // 清理本地已 revoked/非协作文件的残留 baseline
         await this.pruneStaleCollaborationBaselines();
         this.diagnostics?.record({
@@ -233,6 +255,10 @@ export class CollabManager {
   /** 本地协作文件被编辑，转交文件同步防抖上传 */
   handleLocalEdit(path: string): void {
     this.fileSync.handleLocalEdit(path);
+  }
+
+  flushLocalEdit(path: string): void {
+    if (this.isRunning()) this.fileSync.flushLocalEdit(path);
   }
 
   /** 接受或拒绝邀请 */

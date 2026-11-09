@@ -14,7 +14,7 @@ import {
   TFolder,
   Vault,
 } from "obsidian";
-import type { Command, Editor } from "obsidian";
+import type { Command, Editor, MarkdownView } from "obsidian";
 import { OSSApiClient, VaultOut } from "./api";
 import type {
   ShareOut,
@@ -65,6 +65,9 @@ import { NoticeGuard } from "./notice-guard";
 import { httpRequest, setNonJsonSink, setTransportDiagnosticSink } from "./http-transport";
 import { createDiagnosticReport, saveDiagnosticReport, diagnosticRoute } from "./diagnostic-report";
 import { ConflictOpeningGuard } from "./conflict-opening-guard";
+import { collaborationCursors } from "./collaboration-cursors";
+import { markdownFocusSync } from "./markdown-focus-sync";
+import { configurationRelativePath } from "./blacklist";
 
 /** 插件持久化数据结构，在设置之外额外保存登录令牌 */
 interface PluginData extends OSSSettings {
@@ -142,6 +145,13 @@ export default class OSSPlugin extends Plugin {
       () => this.sidebarView?.refresh(),
       this.diagnostics
     );
+    this.registerEditorExtension(collaborationCursors({
+      getTarget: (path) => this.collabManager.getCursorTarget(path),
+      exchange: (target, offset, hash) => this.api.exchangeCollaborationCursor(target.vaultID, target.fileID, offset, hash),
+    }));
+    this.registerEditorExtension(markdownFocusSync((file, markdown) => {
+      void this.syncAfterEditorLeave(file, markdown);
+    }));
 
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf) => new SidebarView(leaf, this));
     this.ribbonEl = this.addRibbonIcon("refresh-cw", this.t("ribbon.openSidebar"), () => {
@@ -305,6 +315,23 @@ export default class OSSPlugin extends Plugin {
         }
       });
     });
+  }
+
+  private async syncAfterEditorLeave(file: TFile, markdown: MarkdownView): Promise<void> {
+    if (!this.loaded || !this.api.hasToken()) return;
+    try {
+      // 切换同一页签里的文件时，原文由编辑器卸载流程保存。
+      if (markdown.file === file) await markdown.save();
+    } catch {
+      // 宿主已经提示保存错误，等待后续保存成功再同步。
+      return;
+    }
+    if (!this.loaded || !this.api.hasToken()) return;
+    if (isCollabPath(file.path)) {
+      this.collabManager.flushLocalEdit(file.path);
+    } else {
+      await this.syncEngine.flushFile(normalizeRel(file.path));
+    }
   }
 
   /** 宿主不会等待异步卸载，所有轮询必须同步停止；已入队保存继续完成并记录失败 */
@@ -887,19 +914,13 @@ export default class OSSPlugin extends Plugin {
 
   /** 打开普通同步的冲突窗口，guard 保证同一路径不会并发弹出多个窗口 */
   openConflictModal(path: string): void {
-    if (!this.conflictOpenings.begin(path)) return;
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) {
-      this.conflictOpenings.end(path);
-      new Notice(this.t("notice.conflictFileMissing", { path }));
-      this.syncEngine.dismissConflict(path);
-      this.sidebarView?.refresh();
+    if (this.settings.syncConfiguration && this.settings.autoResolveConfiguration &&
+        configurationRelativePath(path, this.app.vault.configDir) !== null) {
+      void this.syncEngine.runOnce({ forceFull: true });
       return;
     }
+    if (!this.conflictOpenings.begin(path)) return;
     void (async () => {
-      let remote: string;
-      let baseText: string | null = null;
-      let binary = false;
       try {
         const conflict = this.syncEngine.getConflict(path);
         if (!conflict) {
@@ -907,26 +928,22 @@ export default class OSSPlugin extends Plugin {
           this.conflictOpenings.end(path);
           return;
         }
-        baseText = this.syncEngine.getBaseline(path)?.baseText ?? null;
-        binary = conflict.remoteType === "attachment";
-        if (conflict.remoteDeleted || binary) {
-          remote = "";
-        } else {
-          const res = await this.api.downloadV2(
-            this.settings.vaultId,
-            path,
-            conflict.remoteRevision
-          );
-          remote = new TextDecoder().decode(new Uint8Array(res.content));
-        }
+        const binary = conflict.remoteType === "attachment";
+        const local = binary ? null : await this.syncEngine.readConflictLocal(path);
+        const baseText = this.syncEngine.getBaseline(path)?.baseText ?? null;
+        const decoder = new TextDecoder();
+        const localText = !binary && local ? decoder.decode(local.bytes) : "";
+        const remote = conflict.remoteDeleted || binary ? "" : decoder.decode(
+          (await this.api.downloadV2(this.settings.vaultId, path, conflict.remoteRevision)).content
+        );
+        const preview = { localHash: binary ? conflict.localHash : local?.hash ?? "", remoteRevision: conflict.remoteRevision };
+        new ConflictModal(this.app, this, path, async () => localText, remote, async (r) => {
+          await this.applyConflictResolution(path, r, preview);
+        }, { baseText, binary, localMissing: !preview.localHash, onClose: () => this.conflictOpenings.end(path) }).open();
       } catch (e) {
         new Notice(this.t("notice.fetchRemoteFailed", { error: this.localizedError(e) }));
         this.conflictOpenings.end(path);
-        return;
       }
-      new ConflictModal(this.app, this, this.api, file, remote, async (r) => {
-        await this.applyConflictResolution(path, r);
-      }, { baseText, binary, onClose: () => this.conflictOpenings.end(path) }).open();
     })();
   }
 
@@ -1002,7 +1019,7 @@ export default class OSSPlugin extends Plugin {
     }
     const remote = entry.conflict.remoteText;
     const baseText = entry.baseText ?? "";
-    new ConflictModal(this.app, this, this.api, file, remote, async (r) => {
+    new ConflictModal(this.app, this, file.path, () => this.app.vault.read(file), remote, async (r) => {
       await this.applyCollaborationConflictResolution(vaultId, fileId, r);
     }, { baseText, onClose: () => this.conflictOpenings.end(guardKey) }).open();
   }
@@ -1038,8 +1055,8 @@ export default class OSSPlugin extends Plugin {
   }
 
   /** 应用普通同步冲突的解决方案，成功后按所选方案给出提示 */
-  async applyConflictResolution(path: string, r: ConflictResolution): Promise<void> {
-    await this.syncEngine.resolveConflict(path, r);
+  async applyConflictResolution(path: string, r: ConflictResolution, preview: { localHash: string; remoteRevision: number }): Promise<void> {
+    await this.syncEngine.resolveConflict(path, r, preview);
     const isOrdered = typeof r === "object" && (r as { kind: string }).kind === "ordered_merge";
     const resolutionKeys: Record<string, TranslationKey> = {
       accept_remote: "conflict.acceptRemoteButton",

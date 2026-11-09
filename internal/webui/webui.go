@@ -21,6 +21,7 @@ import (
 	"github.com/helantianshen/oss-sync/internal/blog"
 	"github.com/helantianshen/oss-sync/internal/config"
 	"github.com/helantianshen/oss-sync/internal/models"
+	"github.com/helantianshen/oss-sync/internal/serverbackup"
 	"github.com/helantianshen/oss-sync/internal/serverplugin"
 	"github.com/helantianshen/oss-sync/internal/update"
 	"github.com/helantianshen/oss-sync/internal/vaultaccess"
@@ -47,7 +48,10 @@ type Handler struct {
 	updateSvc     *update.Service
 	pluginManager *serverplugin.Manager
 	fileWriter    fileContentWriter
+	backups       *serverbackup.Manager
 }
+
+func (h *Handler) SetBackups(backups *serverbackup.Manager) { h.backups = backups }
 
 // SetUpdateService 注入共享更新服务（直接注入，不代理 Bearer token）
 func (h *Handler) SetUpdateService(svc *update.Service, up *update.Updater) {
@@ -257,6 +261,18 @@ func (h *Handler) Register(r *gin.Engine) {
 		adminGroup.POST("/plugins/:id/update", h.adminPluginUpdate)
 		adminGroup.GET("/backups/:id/download", h.downloadBackup)
 		adminGroup.POST("/backups/:id/delete", h.deleteBackup)
+		if h.backups != nil {
+			archives := adminGroup.Group("/server-backups")
+			archives.GET("", h.serverBackupPage)
+			archives.POST("/create", h.createServerBackup)
+			archives.POST("/import", h.importServerBackup)
+			archives.GET("/:id/export", h.exportServerBackup)
+			archives.POST("/:id/restore", h.restoreServerBackup)
+			archives.POST("/:id/delete", h.deleteServerBackup)
+			archives.POST("/mirrors/add", h.addServerMirror)
+			archives.POST("/mirrors/:id/sync", h.syncServerMirror)
+			archives.POST("/mirrors/:id/delete", h.deleteServerMirror)
+		}
 	}
 
 	// 旧 /admin 路由保留重定向，统一指向控制台与登录入口

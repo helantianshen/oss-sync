@@ -9,6 +9,10 @@ import type { OSSSettings } from "./settings";
 import { isValidOperationID, isValidServerRevision } from "./operation-id.js";
 import { httpRequest, type HttpResponse } from "./http-transport.js";
 import { diagnosticErrorDetails } from "./diagnostic-report";
+import {
+  applyMarkdownDelta, buildMarkdownDelta, canUseMarkdownDelta,
+  DELTA_CONTENT_TYPE, DELTA_SIGNATURE_TYPE, markdownSignature,
+} from "./markdown-delta";
 
 /** 登录响应；device_status 为 pending 时令牌可用但需等待授权 */
 export interface AuthResponse {
@@ -141,6 +145,13 @@ export interface SyncManifestResponse {
   recovery_snapshot: boolean;
   server_time: number;
   files: SyncFileMeta[];
+  delta_v1?: boolean;
+}
+
+interface DownloadDeltaBase {
+  readonly size: number;
+  readonly hash: string;
+  readonly readBase: () => Promise<Uint8Array | null>;
 }
 
 /** 同步模式 */
@@ -203,6 +214,13 @@ export interface CollabEntry {
   /** 协作者是否可读该文件的修改记录，仅 owner 或 manager 可改 */
   allow_history_view: boolean;
   created_at: string;
+}
+
+export interface CollaborationCursor {
+  readonly user_id: number;
+  readonly username: string;
+  readonly offset: number;
+  readonly hash: string;
 }
 
 /** 服务端 API 错误；current、compactedRevision 与 headRevision 仅在同步接口返回 */
@@ -333,6 +351,7 @@ export class OSSApiClient {
   /** 服务端时间与本地时间的偏移，单位为毫秒*/
   private timeOffset = 0;
   private token: string | null = null;
+  private markdownDeltaSource = "";
 
   constructor(
     private settings: OSSSettings,
@@ -452,6 +471,7 @@ export class OSSApiClient {
   /** 拉取全量清单；after 与 wait 由调用方控制分页与长轮询等待 */
   async manifest(vaultID: string, after = 0, waitSeconds = 0): Promise<SyncManifestResponse> {
     const before = Date.now();
+    const source = this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync`);
     const result = await this.doRequest<SyncManifestResponse>(
       "GET",
       `/api/vaults/${encodeURIComponent(vaultID)}/sync/manifest` +
@@ -460,12 +480,14 @@ export class OSSApiClient {
         `&client_id=${encodeURIComponent(this.settings.clientId)}`
     );
     this.updateTimeOffset(result.server_time, before, Date.now());
+    this.markdownDeltaSource = result.delta_v1 === true ? source : "";
     return result;
   }
 
   /** 拉取自 cursor 之后的变更；waitSeconds 用于长轮询 */
   async changes(vaultID: string, after: number, waitSeconds = 0): Promise<SyncManifestResponse> {
     const before = Date.now();
+    const source = this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync`);
     const result = await this.doRequest<SyncManifestResponse>(
       "GET",
       `/api/vaults/${encodeURIComponent(vaultID)}/sync/changes` +
@@ -474,6 +496,7 @@ export class OSSApiClient {
         `&client_id=${encodeURIComponent(this.settings.clientId)}`
     );
     this.updateTimeOffset(result.server_time, before, Date.now());
+    this.markdownDeltaSource = result.delta_v1 === true ? source : "";
     return result;
   }
 
@@ -499,10 +522,16 @@ export class OSSApiClient {
       mtime: number;
       operationID: string;
       content: ArrayBuffer;
+      deltaBaseHash?: string;
     }
-  ): Promise<SyncFileMeta> {
+  ): Promise<SyncFileMeta & { readonly usedDelta?: true }> {
     const startedAt = Date.now();
     let status: number | undefined;
+    let bytes = 0;
+    let mode: "delta" | "full" | undefined;
+    let signatureBytes: number | undefined;
+    let patchBytes: number | undefined;
+    const endpoint = this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync`);
     const query = new URLSearchParams({
       path: input.path,
       base_revision: String(input.baseRevision),
@@ -512,17 +541,51 @@ export class OSSApiClient {
       operation_id: input.operationID,
     });
     try {
-      const res = await httpRequest({
-        url: this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync/upload?${query.toString()}`),
-        method: "POST",
-        headers: {
-  "Content-Type": "application/octet-stream",
-  ...this.authHeaders(),
-          },
-        body: input.content,
+      const send = async (content: ArrayBuffer, type: string): Promise<HttpResponse> => {
+        bytes += content.byteLength;
+        const response = await httpRequest({
+          url: `${endpoint}/upload?${query.toString()}`,
+          method: "POST",
+          headers: { "Content-Type": type, ...this.authHeaders() },
+          body: content,
         });
-      status = res.status;
-      return this.parseResponse<SyncFileMeta>(res.status, res.json, res.text);
+        status = response.status;
+        return response;
+      };
+      if (this.markdownDeltaSource === endpoint && input.deltaBaseHash && canUseMarkdownDelta(input.content.byteLength)) {
+        const baseQuery = new URLSearchParams({ path: input.path, revision: String(input.baseRevision) });
+        const signature = await httpRequest({
+          url: `${endpoint}/delta-base?${baseQuery.toString()}`,
+          method: "GET",
+          headers: this.authHeaders(),
+        });
+        if (signature.status >= 400 && ![404, 405, 409, 415].includes(signature.status)) {
+          await this.parseResponse<never>(signature.status, signature.json, signature.text);
+        }
+        if (signature.status === 200 && header(signature.headers, "content-type") === DELTA_SIGNATURE_TYPE) {
+          signatureBytes = signature.arrayBuffer.byteLength;
+        }
+        if (signatureBytes !== undefined && header(signature.headers, "x-oss-hash") === input.deltaBaseHash &&
+            header(signature.headers, "x-oss-revision") === String(input.baseRevision)) {
+          const patch = await buildMarkdownDelta(signature.arrayBuffer, new Uint8Array(input.content));
+          if (patch) {
+            patchBytes = patch.byteLength;
+            query.set("base_hash", input.deltaBaseHash);
+            const result = await send(patch, DELTA_CONTENT_TYPE);
+            if (result.status !== 415 && !(result.status === 422 && isErrorBody(result.json) && result.json.code === "delta_invalid")) {
+              const meta = await this.parseResponse<SyncFileMeta>(result.status, result.json, result.text);
+              const receipt = Object.assign(meta, { usedDelta: true as const });
+              mode = "delta";
+              return receipt;
+            }
+            query.delete("base_hash");
+          }
+        }
+      }
+      const res = await send(input.content, "application/octet-stream");
+      const meta = await this.parseResponse<SyncFileMeta>(res.status, res.json, res.text);
+      if (meta) mode = "full";
+      return meta;
     } finally {
       this.recordDirectAPI("POST", status, startedAt);
       this.diagnostics?.record({
@@ -530,7 +593,12 @@ export class OSSApiClient {
         at: Date.now(),
         scope: "upload",
         durationMs: Date.now() - startedAt,
-        bytes: input.content.byteLength,
+        bytes,
+        path: input.path,
+        mode,
+        fullBytes: input.content.byteLength,
+        signatureBytes,
+        patchBytes,
       });
     }
   }
@@ -539,23 +607,33 @@ export class OSSApiClient {
   async downloadV2(
     vaultID: string,
     path: string,
-    revision: number
-  ): Promise<{ content: ArrayBuffer; meta: SyncFileMeta }> {
+    revision: number,
+    delta?: DownloadDeltaBase,
+  ): Promise<{ content: ArrayBuffer; meta: SyncFileMeta; readonly usedDelta?: true }> {
     const startedAt = Date.now();
     let status: number | undefined;
     let bytes: number | undefined;
+    let mode: "delta" | "full" | undefined;
+    let fullBytes: number | undefined;
+    let signatureBytes: number | undefined;
+    let patchBytes: number | undefined;
     const query = new URLSearchParams({ path, revision: String(revision) });
+    const endpoint = this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync`);
     this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "started", details: { path, revision } });
     try {
-      const requestDownload = async (attempt = 0): Promise<HttpResponse> => {
+      const requestDownload = async (signature?: ArrayBuffer, attempt = 0): Promise<HttpResponse> => {
         status = undefined;
         try {
           const response = await httpRequest({
-            url: this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync/download?${query.toString()}`),
-            method: "GET", headers: this.authHeaders(),
+            url: `${endpoint}/${signature ? "download-delta" : "download"}?${query.toString()}`,
+            method: signature ? "POST" : "GET",
+            headers: signature ? { "Content-Type": DELTA_SIGNATURE_TYPE, ...this.authHeaders() } : this.authHeaders(),
+            body: signature,
           });
           status = response.status;
-          if (response.status >= 400) await this.parseResponse<never>(response.status, response.json, response.text);
+          if (response.status >= 400 && !(signature && [404, 405, 415].includes(response.status))) {
+            await this.parseResponse<never>(response.status, response.json, response.text);
+          }
           return response;
         } catch (error) {
           // 仅为同一 revision 的幂等下载缓解明确的 SQLite 短暂锁冲突。
@@ -563,18 +641,43 @@ export class OSSApiClient {
           const delayMs = attempt === 0 ? 250 : 750;
           this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "database_busy_retry", details: { path, revision, attempt: attempt + 1, delayMs, status: error.status } });
           await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
-          return requestDownload(attempt + 1);
+          return requestDownload(signature, attempt + 1);
         }
       };
-      const res = await requestDownload();
-      bytes = res.arrayBuffer.byteLength;
+      let content: ArrayBuffer | null = null;
+      let res: HttpResponse | undefined;
+      if (this.markdownDeltaSource === endpoint && delta && canUseMarkdownDelta(delta.size)) {
+        const base = await delta.readBase();
+        if (base && canUseMarkdownDelta(base.length)) {
+          const signature = await markdownSignature(base);
+          signatureBytes = signature.byteLength;
+          res = await requestDownload(signature);
+          bytes = res.arrayBuffer.byteLength;
+          if (res.status === 200 && header(res.headers, "content-type") === DELTA_CONTENT_TYPE) {
+            patchBytes = bytes;
+            if (header(res.headers, "x-oss-revision") === String(revision) && header(res.headers, "x-oss-hash") === delta.hash) {
+              content = await applyMarkdownDelta(base, res.arrayBuffer, delta);
+            }
+          }
+        }
+      }
+      if (content === null || !res) {
+        res = await requestDownload();
+        bytes = (bytes ?? 0) + res.arrayBuffer.byteLength;
+        content = res.arrayBuffer;
+        mode = "full";
+      } else {
+        mode = "delta";
+      }
+      fullBytes = content.byteLength;
       return {
-        content: res.arrayBuffer,
+        content,
+        ...(mode === "delta" && { usedDelta: true as const }),
         meta: {
           path,
           type: classifySyncPath(path, this.configDir),
           hash: header(res.headers, "x-oss-hash"),
-          size: res.arrayBuffer.byteLength,
+          size: content.byteLength,
           mtime: parseInt(header(res.headers, "x-oss-mtime") || "0", 10),
           revision: parseInt(header(res.headers, "x-oss-revision") || "0", 10),
           deleted: false,
@@ -591,6 +694,11 @@ export class OSSApiClient {
         scope: "download",
         durationMs: Date.now() - startedAt,
         ...(bytes === undefined ? {} : { bytes }),
+        path,
+        mode,
+        fullBytes,
+        signatureBytes,
+        patchBytes,
       });
     }
   }
@@ -715,11 +823,22 @@ export class OSSApiClient {
   }
 
   /** 列出当前用户在仓库中的协作关系*/
-  async collabList(vaultID: string): Promise<{ collaborations: CollabEntry[] }> {
-    return this.doRequest<{ collaborations: CollabEntry[] }>(
+  async collabList(vaultID: string): Promise<{ collaborations: CollabEntry[]; presence_v1?: boolean; presence_read_v1?: boolean }> {
+    return this.doRequest<{ collaborations: CollabEntry[]; presence_v1?: boolean; presence_read_v1?: boolean }>(
       "GET",
       `/api/vaults/${encodeURIComponent(vaultID)}/collaborations`
     );
+  }
+
+  async exchangeCollaborationCursor(
+    vaultID: string, fileID: number, offset: number | null, hash: string,
+  ): Promise<readonly CollaborationCursor[]> {
+    const response = await this.doRequest<{ cursors: CollaborationCursor[] }>(
+      offset === null ? "GET" : "POST",
+      `/api/vaults/${encodeURIComponent(vaultID)}/collaborations/files/${fileID}/presence`,
+      offset === null ? undefined : { offset, hash },
+    );
+    return response.cursors;
   }
 
   /** 列出当前用户跨仓库收到的协作关系*/

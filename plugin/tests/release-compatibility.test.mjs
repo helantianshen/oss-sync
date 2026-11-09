@@ -43,3 +43,25 @@ test("确认弹窗等待选择，取消或关闭不允许继续执行", async (t
     assert.equal(await result, action === "confirm");
   }
 });
+test("third-party installation files require both opt-ins and cannot include this plugin or private data", async (t) => {
+  const { buildSyncPathFilter } = await load(t, "blacklist");
+  const rules = {
+    syncConfiguration: true, syncCommunityPlugins: true, ownPluginDir: ".custom/plugins/local-oss",
+    syncExclusions: ".custom/plugins/excluded", syncWhitelist: ".custom/plugins/oss-sync/**",
+  };
+  const allows = buildSyncPathFilter(".custom", rules);
+  for (const file of ["manifest.json", "main.js", "styles.css"]) {
+    assert.equal(allows(`.custom/plugins/fixture/${file}`), true);
+  }
+  for (const path of [
+    ".custom/plugins/fixture/data.json", ".custom/plugins/fixture/extra.js",
+    ".custom/plugins/oss-sync/main.js", ".CUSTOM/plugins/OSS-SYNC/main.js",
+    ".custom/plugins/local-oss/main.js", ".custom/plugins/oss-sync./main.js",
+    ".custom/plugins/excluded/main.js",
+  ]) {
+    assert.equal(allows(path), false, path);
+  }
+  for (const optOut of [{ syncConfiguration: false }, { syncCommunityPlugins: false }]) {
+    assert.equal(buildSyncPathFilter(".custom", { ...rules, ...optOut })(".custom/plugins/fixture/main.js"), false);
+  }
+});

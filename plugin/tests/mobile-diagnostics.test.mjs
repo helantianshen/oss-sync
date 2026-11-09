@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ async function load(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const outfile = join(dir, "test.mjs");
   await build({
-    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine", "settings-tab"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine", "settings-tab", "markdown-delta", "ordinary-sync-file-access"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
     outfile, bundle: true, platform: "node", format: "esm",
     plugins: [{ name: "mobile-host", setup(builder) {
       builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "host" }));
@@ -19,9 +20,10 @@ async function load(t) {
         export const host={request:null}; export const Platform={isDesktop:false,isMobile:true};
         export function requestUrl(input){return host.request(input);}
         export class Notice{constructor(message){host.notices??=[];host.notices.push(message);}} export class App{} export class TAbstractFile{} export class TFile{} export class TFolder{} export class Vault{}
-        export class Modal{} export class Setting{} export class ButtonComponent{} export class ItemView{} export class Plugin{} export class PluginSettingTab{}
-        export const normalizePath=p=>p; export function setIcon(){} export const apiVersion="1.14.5";
+        export class Modal{} export class Setting{} export class ButtonComponent{} export class ItemView{} export class MarkdownView{} export class Plugin{} export class PluginSettingTab{}
+        export const normalizePath=p=>p; export function setIcon(){} export function setTooltip(){} export const apiVersion="1.14.5";
         export function requireApiVersion(){return true;}
+        export const editorInfoField = undefined;
         export function getLanguage(){return "zh";} export class MarkdownRenderer{}
       ` }));
     } }],
@@ -101,6 +103,162 @@ test("mobile file downloads skip the native JSON getter and preserve every byte"
   assert.doesNotMatch(JSON.stringify(diagnostics.snapshot()), /PRIVATE-NOTE-BODY|SECRET-TOKEN|SECRET-COOKIE|secret-vault/);
   diagnostics.record({ kind: "api_failed", at: 2, method: "GET", path: "/api/test", message: "Unexpected token PRIVATE-NOTE-BODY is not valid JSON" });
   assert.doesNotMatch(JSON.stringify(diagnostics.snapshot()), /PRIVATE-NOTE-BODY/);
+});
+
+test("large Markdown uploads and downloads exchange small deltas and verify reconstructed bytes", async (t) => {
+  const m = await load(t);
+  const base = Buffer.alloc(10 * 1024 * 1024, 97);
+  for (let offset = 0; offset < base.length; offset += 4096) {
+    base.write(`## Paragraph ${offset}\r\n`, offset);
+  }
+  const target = Buffer.concat([
+    base.subarray(0, 1024 * 1024 + 11), Buffer.from("新增一行 📝\r\n"),
+    base.subarray(1024 * 1024 + 11, 8 * 1024 * 1024), base.subarray(8 * 1024 * 1024 + 3),
+  ]);
+  const hash = (body) => createHash("sha256").update(body).digest("hex");
+  const expected = { size: target.length, hash: hash(target) };
+  const path = "notes/large.md";
+  const signature = await m.markdownSignature(base);
+  const patch = await m.buildMarkdownDelta(signature, target);
+  assert.ok(patch && patch.byteLength + signature.byteLength < target.length / 100);
+  const diagnostics = new m.Diagnostics();
+  const api = new m.OSSApiClient({ serverUrl: "https://example.invalid", clientId: "test-device", deviceName: "test" }, diagnostics);
+  const binary = (body, headers) => ({ status: 200, arrayBuffer: body, headers, text: "" });
+  const jsonResponse = (value) => ({
+    ...binary(new ArrayBuffer(0), { "Content-Type": "application/json" }), text: JSON.stringify(value),
+  });
+  let newServer = true;
+  let corruptDownload = false;
+  let rejectUploadPatch = false;
+  const fullBody = Uint8Array.from(target).buffer;
+  const calls = [];
+  m.host.request = async (request) => {
+    const route = new URL(request.url).pathname.split("/").at(-1);
+    const type = request.headers["Content-Type"];
+    calls.push([route, type]);
+    switch (route) {
+      case "manifest":
+        return jsonResponse({ server_time: Date.now(), ...(newServer ? { delta_v1: true } : {}) });
+      case "delta-base":
+        return binary(signature, { "Content-Type": m.DELTA_SIGNATURE_TYPE, "X-OSS-Hash": hash(base), "X-OSS-Revision": "1" });
+      case "upload":
+        if (type === m.DELTA_CONTENT_TYPE) {
+          assert.deepEqual(Buffer.from(await m.applyMarkdownDelta(base, request.body, expected)), target);
+          if (rejectUploadPatch) return { ...jsonResponse({ code: "delta_invalid" }), status: 422 };
+        } else {
+          assert.equal(type, "application/octet-stream");
+          assert.deepEqual(Buffer.from(request.body), target);
+        }
+        return jsonResponse({ revision: 2, hash: expected.hash });
+      case "download-delta": {
+        assert.deepEqual(Buffer.from(request.body), Buffer.from(signature));
+        const received = patch.slice(0);
+        if (corruptDownload) new Uint8Array(received)[received.byteLength - 1] ^= 1;
+        return binary(received, { "Content-Type": m.DELTA_CONTENT_TYPE, "X-OSS-Hash": expected.hash, "X-OSS-Revision": "2" });
+      }
+      case "download":
+        return binary(fullBody, { "X-OSS-Hash": expected.hash, "X-OSS-Revision": "2" });
+      default:
+        throw new Error(`Unexpected route ${route}`);
+    }
+  };
+  await api.manifest("vault");
+  const upload = { path, baseRevision: 1, deltaBaseHash: hash(base), hash: expected.hash, content: fullBody, operationID: "test", mtime: 1 };
+  const uploaded = await api.uploadV2("vault", upload);
+  assert.equal(uploaded.revision, 2);
+  assert.equal(uploaded.usedDelta, true);
+  const download = async () => api.downloadV2("vault", path, 2, { ...expected, readBase: async () => base });
+  const downloaded = await download();
+  assert.deepEqual(Buffer.from(downloaded.content), target);
+  assert.equal(downloaded.usedDelta, true);
+  assert.deepEqual(calls.map(([route]) => route), ["manifest", "delta-base", "upload", "download-delta"]);
+  corruptDownload = true;
+  const fallback = await download();
+  assert.deepEqual(Buffer.from(fallback.content), target);
+  assert.equal(fallback.usedDelta, undefined);
+  assert.deepEqual(calls.slice(-2).map(([route]) => route), ["download-delta", "download"]);
+  rejectUploadPatch = true;
+  assert.equal((await api.uploadV2("vault", upload)).usedDelta, undefined);
+  assert.deepEqual(calls.slice(-2), [["upload", m.DELTA_CONTENT_TYPE], ["upload", "application/octet-stream"]]);
+  newServer = false;
+  await api.manifest("vault");
+  assert.equal((await api.uploadV2("vault", upload)).usedDelta, undefined);
+  assert.deepEqual(calls.slice(-2).map(([route]) => route), ["manifest", "upload"]);
+  const transfers = diagnostics.snapshot().filter((event) => event.kind === "transfer");
+  assert.deepEqual(transfers.map(({ scope, mode }) => [scope, mode]), [
+    ["upload", "delta"], ["download", "delta"], ["download", "full"], ["upload", "full"], ["upload", "full"],
+  ]);
+  for (const event of transfers.slice(0, 4)) {
+    assert.equal(event.path, path);
+    assert.equal(event.fullBytes, target.length);
+    assert.equal(event.patchBytes, patch.byteLength);
+    assert.equal(event.signatureBytes, signature.byteLength);
+    assert.equal(event.bytes, patch.byteLength + (event.mode === "full" ? target.length : 0));
+  }
+  assert.equal(transfers[4].bytes, target.length);
+  assert.equal(transfers[4].patchBytes, undefined);
+  assert.equal(transfers[4].signatureBytes, undefined);
+});
+
+test("sync notices distinguish actual deltas, full transfers, and skipped paths", async (t) => {
+  const { SyncEngine } = await load(t);
+  const notices = [];
+  const report = (transfers) => SyncEngine.prototype.reportTransferNotifications.call(
+    { showTransferNotice: (notice) => notices.push(notice) },
+    transfers.map(([path, kind]) => ({ path, kind })),
+    transfers.map(([, , transfer]) => ({ ok: true, result: { kind: "resolved", transfer } })),
+  );
+  report([
+    ["edited-local.md", "upload", "delta"],
+    ["edited-remote.md", "download", "delta"],
+    ["new.md", "download", "full"],
+    ["skipped.md", "download"],
+  ]);
+  assert.deepEqual(notices.splice(0), [
+    { kind: "downloaded", path: "new.md" },
+    { kind: "deltaSynced", path: "edited-local.md" },
+    { kind: "deltaSynced", path: "edited-remote.md" },
+  ]);
+  report(Array.from({ length: 6 }, (_, index) => [`note-${index}.md`, "download", "delta"]));
+  assert.deepEqual(notices, [{ kind: "deltaSynced", count: 6 }]);
+});
+
+test("path rules preserve hard exclusions and portable configuration uses the hidden directory adapter", async (t) => {
+  const m = await load(t);
+  const configDir = ".custom-config";
+  const rules = { syncConfiguration: true, syncExclusions: "Private/\n**/*.pdf", syncWhitelist: "Private/Shared/\n**/allowed.pdf\n.custom-config/plugins/**" };
+  const allowed = m.buildSyncPathFilter(configDir, rules);
+  assert.equal(allowed("Private/hidden.md"), false);
+  assert.equal(allowed("Private/Shared/note.md"), true);
+  assert.equal(allowed("folder/document.pdf"), false);
+  assert.equal(allowed("allowed.pdf"), true);
+  assert.equal(allowed(`${configDir}/appearance.json`), true);
+  assert.equal(allowed(`${configDir}/themes/custom/theme.css`), true);
+  assert.equal(allowed(`${configDir}/plugins/other/data.json`), false);
+  assert.equal(allowed(`${configDir}/plugins/other/main.js`), false);
+  assert.equal(allowed(`${configDir}/workspace-mobile.json`), false);
+  assert.equal(m.buildSyncPathFilter(configDir, { ...rules, syncConfiguration: false })(`${configDir}/appearance.json`), false);
+
+  const files = new Map();
+  const folders = new Set([configDir]);
+  const adapter = {
+    stat: async (path) => folders.has(path) ? { type: "folder" } : files.has(path) ? { type: "file", mtime: 1 } : null,
+    exists: async (path) => folders.has(path) || files.has(path),
+    mkdir: async (path) => { folders.add(path); },
+    readBinary: async (path) => files.get(path),
+    writeBinary: async (path, value) => { files.set(path, value); },
+    remove: async (path) => { files.delete(path); },
+  };
+  const access = new m.OrdinarySyncFileAccess({ configDir, adapter });
+  const path = `${configDir}/snippets/style.css`;
+  const bytes = new TextEncoder().encode(".example { color: red; }");
+  const created = await access.create(path, { kind: "absent" }, bytes);
+  assert.equal(created.kind, "created");
+  assert.deepEqual((await access.readExact(path)).bytes, bytes);
+  assert.equal((await access.replace(path, { kind: "hash", hash: "stale" }, new Uint8Array())).kind, "stale");
+  assert.equal((await access.deleteExact(path, { kind: "hash", hash: created.snapshot.hash })).kind, "deleted");
+  assert.equal(await access.readExact(path), null);
+  assert.ok(folders.has(configDir));
 });
 
 test("the plugin export uses Obsidian Platform flags and retains the saved file if opening fails", async (t) => {
@@ -248,7 +406,7 @@ test("a local write failure is distinguished from download failure and is still 
   const diagnostics = new m.Diagnostics();
   const error = new Error("EACCES permission denied");
   const remote = { path: "notes/手机.md", size: 64, revision: 5 };
-  const engine = { diagnostics, api: { downloadV2: async () => ({ content: new ArrayBuffer(64), meta: remote }) }, ordinaryFileAccess: { create: async () => { throw error; } } };
+  const engine = { diagnostics, isSyncPath: () => true, api: { downloadV2: async () => ({ content: new ArrayBuffer(64), meta: remote }) }, ordinaryFileAccess: { create: async () => { throw error; } } };
   engine.applyDownload = (...args) => m.SyncEngine.prototype.applyDownload.apply(engine, args);
   engine.handleActionFailure = (...args) => m.SyncEngine.prototype.handleActionFailure.apply(engine, args);
   const action = { kind: "download", path: remote.path, remote, expectedLocal: { kind: "absent" } };

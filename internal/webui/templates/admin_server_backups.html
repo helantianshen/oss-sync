@@ -1,0 +1,84 @@
+{{define "admin-server-backups"}}
+<section class="dashboard-heading"><div><h1>{{.Layout.T "backup.title"}}</h1></div></section>
+{{if .Data.Error}}<div class="notice notice--error" role="alert">{{.Data.Error}}</div>{{else if .Data.Saved}}<div class="notice notice--success" role="status">{{.Layout.T "backup.done"}}</div>{{end}}
+<article class="ledger-panel">
+  <header><h2>{{.Layout.T "backup.local"}}</h2></header>
+  <p class="panel-note">{{.Layout.T "backup.scope"}}</p>
+  <form method="post" action="/dashboard/admin/server-backups/create" class="panel-note backup-actions">
+    <input type="hidden" name="_csrf" value="{{.Layout.CSRF}}">
+    <label class="backup-actions__type">{{.Layout.T "backup.type"}}
+      <select name="kind">
+        <option value="full">{{.Layout.T "backup.full"}}</option>
+        <option value="configuration">{{.Layout.T "backup.configuration"}}</option>
+        <option value="articles">{{.Layout.T "backup.articles"}}</option>
+      </select>
+    </label>
+    <button class="button button--primary" type="submit">{{.Layout.T "backup.create"}}</button>
+  </form>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{.Layout.T "backup.archive"}}</th><th>{{.Layout.T "backup.type"}}</th><th>{{.Layout.T "admin.backup_time"}}</th><th>{{.Layout.T "common.size"}}</th><th>{{.Layout.T "common.actions"}}</th></tr></thead>
+      <tbody>
+        {{range .Data.Archives}}
+        <tr>
+          <td><strong>{{.Name}}</strong>{{if .Missing}}<small class="file-name">{{$.Layout.T "backup.missing" .Missing}}</small>{{end}}</td>
+          <td>{{$.Layout.T (printf "backup.%s" .Kind)}}</td>
+          <td><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{timeFmt .CreatedAt}}</time></td>
+          <td>{{formatBytes .Size}}</td>
+          <td class="action-cell">
+            <form method="post" action="/dashboard/admin/server-backups/{{.ID}}/restore" data-confirm="{{$.Layout.T "backup.restore_confirm"}}"><input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}"><button class="text-button" type="submit">{{$.Layout.T "backup.restore"}}</button></form>
+            <a class="quiet-link" href="/dashboard/admin/server-backups/{{.ID}}/export">{{$.Layout.T "backup.export"}}</a>
+            <form method="post" action="/dashboard/admin/server-backups/{{.ID}}/delete" data-confirm="{{$.Layout.T "backup.delete_confirm"}}"><input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}"><button class="text-button text-button--danger" type="submit">{{$.Layout.T "common.delete"}}</button></form>
+          </td>
+        </tr>
+        {{else}}<tr><td colspan="5">{{.Layout.T "backup.empty"}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+  <form method="post" action="/dashboard/admin/server-backups/import" enctype="multipart/form-data" class="panel-note backup-actions">
+    <input type="hidden" name="_csrf" value="{{.Layout.CSRF}}">
+    <input class="backup-actions__file" type="file" name="archive" accept=".zip,application/zip" aria-label="{{.Layout.T "backup.archive"}}" required>
+    <button class="button" type="submit">{{.Layout.T "backup.import"}}</button>
+  </form>
+</article>
+<article class="ledger-panel section-spacer">
+  <header><h2>{{.Layout.T "backup.mirrors"}}</h2></header>
+  <p class="panel-note">{{.Layout.T "backup.mirror_scope"}}</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{.Layout.T "backup.connection"}}</th><th>{{.Layout.T "backup.protocol"}}</th><th>{{.Layout.T "backup.last_ok"}}</th><th>{{.Layout.T "backup.status"}}</th><th>{{.Layout.T "common.actions"}}</th></tr></thead>
+      <tbody>
+        {{range .Data.Mirrors}}
+        <tr>
+          <td><strong>{{.Name}}</strong><small class="file-name">{{.Address}}</small></td>
+          <td>{{if eq .Protocol "mount"}}{{$.Layout.T "backup.mount"}}{{else}}WebDAV{{end}}</td>
+          <td>{{timeFmt .LastOK}}</td>
+          <td>{{if .LastError}}{{.LastError}}{{else if .LastOK.IsZero}}{{$.Layout.T "backup.waiting"}}{{else}}{{$.Layout.T "backup.synced"}}{{end}}</td>
+          <td class="action-cell">
+            <form method="post" action="/dashboard/admin/server-backups/mirrors/{{.ID}}/sync"><input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}"><button class="text-button" type="submit">{{$.Layout.T "backup.sync_now"}}</button></form>
+            <form method="post" action="/dashboard/admin/server-backups/mirrors/{{.ID}}/delete" data-confirm="{{$.Layout.T "backup.disconnect_confirm"}}"><input type="hidden" name="_csrf" value="{{$.Layout.CSRF}}"><button class="text-button text-button--danger" type="submit">{{$.Layout.T "backup.disconnect"}}</button></form>
+          </td>
+        </tr>
+        {{else}}<tr><td colspan="5">{{.Layout.T "backup.no_mirrors"}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+  <form method="post" action="/dashboard/admin/server-backups/mirrors/add" class="backup-mirror-form" data-backup-mirror-form>
+    <input type="hidden" name="_csrf" value="{{.Layout.CSRF}}">
+    <div class="backup-mirror-form__fields">
+      <label>{{.Layout.T "backup.connection"}}<input type="text" name="name" maxlength="128" required></label>
+      <label>{{.Layout.T "backup.protocol"}}<select name="protocol"><option value="webdav">WebDAV</option><option value="mount">SMB / NFS</option></select></label>
+      <label class="backup-mirror-form__address" data-backup-mirror-protocol="webdav">{{.Layout.T "backup.webdav_address"}}<input type="url" name="address" placeholder="https://nas.example/dav/" maxlength="2048" required></label>
+      <label class="backup-mirror-form__address" data-backup-mirror-protocol="mount" hidden>{{.Layout.T "backup.mount_path"}}<input type="text" name="address" placeholder="/mnt/notes-backup" maxlength="2048" disabled required></label>
+    </div>
+    <details class="backup-mirror-form__credentials" data-backup-mirror-protocol="webdav">
+      <summary>{{.Layout.T "backup.credentials"}}</summary>
+      <div class="backup-mirror-form__fields">
+        <label>{{.Layout.T "common.username"}}<input type="text" name="username" autocomplete="off"></label>
+        <label>{{.Layout.T "common.password"}}<input type="password" name="password" autocomplete="new-password"></label>
+      </div>
+    </details>
+    <button class="button button--primary" type="submit">{{.Layout.T "backup.add_mirror"}}</button>
+  </form>
+</article>
+{{end}}

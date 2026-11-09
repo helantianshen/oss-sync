@@ -11,6 +11,7 @@
     initCollaborationSelection();
     initThemeSettingGroups();
     initPublicBlogThemeCapability();
+    initBackupMirrorForm();
     document.querySelectorAll('.markdown-preview li > input[type="checkbox"]').forEach(function (checkbox) {
       checkbox.parentElement.classList.add("task-list-item");
       checkbox.parentElement.classList.toggle("is-checked", checkbox.checked);
@@ -111,6 +112,24 @@
     document.body.classList.remove("drawer-open");
     var toggle = document.getElementById("sidebar-toggle");
     if (toggle) toggle.setAttribute("aria-expanded", "false");
+  }
+
+  function initBackupMirrorForm() {
+    var form = document.querySelector("[data-backup-mirror-form]");
+    if (!form) return;
+    var protocol = form.elements.namedItem("protocol");
+    var groups = form.querySelectorAll("[data-backup-mirror-protocol]");
+    function update() {
+      groups.forEach(function (group) {
+        var hidden = group.dataset.backupMirrorProtocol !== protocol.value;
+        group.hidden = hidden;
+        group.querySelectorAll("input").forEach(function (input) {
+          input.disabled = hidden;
+        });
+      });
+    }
+    protocol.addEventListener("change", update);
+    update();
   }
 
   function initThemeSwitcher() {

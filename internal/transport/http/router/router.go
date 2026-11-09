@@ -5,6 +5,7 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -15,6 +16,7 @@ import (
 	"github.com/helantianshen/oss-sync/internal/config"
 	"github.com/helantianshen/oss-sync/internal/devices"
 	"github.com/helantianshen/oss-sync/internal/models"
+	"github.com/helantianshen/oss-sync/internal/serverbackup"
 	"github.com/helantianshen/oss-sync/internal/serverplugin"
 	"github.com/helantianshen/oss-sync/internal/shares"
 	"github.com/helantianshen/oss-sync/internal/syncapi"
@@ -32,6 +34,7 @@ type Dependencies struct {
 	Updater       *update.Updater
 	UpdateService *update.Service
 	PluginManager *serverplugin.Manager
+	Backups       *serverbackup.Manager
 }
 
 // Build 创建 Gin 引擎，安装进程级中间件并注册启用的功能路由
@@ -47,6 +50,10 @@ func Build(deps Dependencies) (*gin.Engine, error) {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(middleware.AccessLogger())
+	if deps.Backups == nil {
+		deps.Backups = serverbackup.New(deps.DB, deps.Cfg.Storage.DataDir, deps.Cfg.Storage.MaxTotalSizeBytes())
+	}
+	r.Use(backupGate(deps.Backups))
 	if deps.PluginManager != nil {
 		r.Use(deps.PluginManager.Middleware(deps.Cfg))
 	}
@@ -71,6 +78,7 @@ func Build(deps Dependencies) (*gin.Engine, error) {
 	if deps.PluginManager != nil {
 		webH.SetPluginManager(deps.PluginManager)
 	}
+	webH.SetBackups(deps.Backups)
 	webH.Register(r)
 
 	vaultsH := vaults.New(deps.DB, deps.Cfg)
@@ -123,6 +131,27 @@ func Build(deps Dependencies) (*gin.Engine, error) {
 	}
 
 	return r, nil
+}
+
+func backupGate(backups *serverbackup.Manager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		route := c.FullPath()
+		if route == "/dashboard/admin/server-backups/import" {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, serverbackup.MaxUploadBytes+(1<<20))
+		}
+		if strings.HasPrefix(route, "/dashboard/admin/server-backups") ||
+			strings.HasSuffix(route, "/collaborations/stream") || route == "/healthz" {
+			c.Next()
+			return
+		}
+		if !backups.TryRead() {
+			c.Header("Retry-After", "5")
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "server backup or restore is in progress"})
+			return
+		}
+		defer backups.EndRead()
+		c.Next()
+	}
 }
 
 // registerHealthRoutes 在功能路由注册前暴露存活与就绪检查

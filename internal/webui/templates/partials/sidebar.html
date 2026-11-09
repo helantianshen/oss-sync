@@ -120,6 +120,7 @@
         </button>
          <ul class="side-nav__sub">
            <li><a class="side-nav__sublink{{if eq .Layout.ActivePage "admin-data"}} is-active{{end}}" href="/dashboard/admin/data">{{.Layout.T "common.data_information"}}</a></li>
+           <li><a class="side-nav__sublink{{if eq .Layout.ActivePage "admin-server-backups"}} is-active{{end}}" href="/dashboard/admin/server-backups">{{.Layout.T "backup.title"}}</a></li>
            <li><a class="side-nav__sublink{{if eq .Layout.ActivePage "admin-users"}} is-active{{end}}" href="/dashboard/admin">{{.Layout.T "common.user_management"}}</a></li>
           <li><a class="side-nav__sublink{{if eq .Layout.ActivePage "admin-vaults"}} is-active{{end}}" href="/dashboard/admin/vaults">{{.Layout.T "common.all_vaults"}}</a></li>
           <li><a class="side-nav__sublink{{if eq .Layout.ActivePage "admin-devices"}} is-active{{end}}" href="/dashboard/admin/devices">{{.Layout.T "common.all_devices"}}</a></li>

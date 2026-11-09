@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -127,8 +126,7 @@ func (c *Cleanup) compactTombstonesForVault(userID uint, vaultID string, now tim
 		}
 		for _, f := range files {
 			// 回收站正文在保留期内必须保留，等待恢复
-			if vaultID != "" && f.StorageKey != "" &&
-				strings.HasPrefix(filepath.ToSlash(f.StorageKey), "vaults/"+vaultID+"/recycle/") {
+			if recycle.IsStorageKey(vaultID, f.StorageKey) {
 				if !f.DeletedAt.Valid ||
 					now.Sub(f.DeletedAt.Time) < time.Duration(retentionDays)*24*time.Hour {
 					continue

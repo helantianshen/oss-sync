@@ -13,6 +13,11 @@ export interface OSSSettings {
   maxConcurrency: number;
   /** 是否优先使用增量同步*/
   incrementalCheck: boolean;
+  syncConfiguration: boolean;
+  autoResolveConfiguration: boolean;
+  syncCommunityPlugins: boolean;
+  syncExclusions: string;
+  syncWhitelist: string;
   /** 博客分享时是否保留目录结构*/
   keepDirectoryTree: boolean;
   /** 当前本地 Obsidian Vault 绑定的服务端 Vault UUID*/
@@ -47,6 +52,11 @@ export const DEFAULT_SETTINGS: OSSSettings = {
   syncIntervalSec: 3,
   maxConcurrency: 6,
   incrementalCheck: true,
+  syncConfiguration: false,
+  autoResolveConfiguration: false,
+  syncCommunityPlugins: false,
+  syncExclusions: "",
+  syncWhitelist: "",
   keepDirectoryTree: true,
   vaultId: "",
   vaultName: "",

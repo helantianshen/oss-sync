@@ -609,6 +609,56 @@ input:focus {
 .ledger-panel > .panel-note { padding: 12px 24px 0; }
 .ledger-panel > .panel-note + .summary-strip,
 .ledger-panel > .panel-note + .database-config-form { margin-top: 12px; }
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: .75rem;
+}
+.backup-actions__type {
+  display: grid;
+  flex: 0 1 10rem;
+  gap: .25rem;
+  min-inline-size: 0;
+}
+.backup-actions__file {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+  max-inline-size: 26rem;
+}
+.backup-actions .button {
+  flex: none;
+  min-block-size: 2.5rem;
+  white-space: nowrap;
+}
+.backup-mirror-form {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
+}
+.backup-mirror-form__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem 1rem;
+}
+.backup-mirror-form__fields > label {
+  display: grid;
+  flex: 1 1 10rem;
+  gap: .375rem;
+  min-inline-size: 0;
+  color: var(--muted);
+}
+.backup-mirror-form__fields > .backup-mirror-form__address { flex: 2 1 15rem; }
+.backup-mirror-form__credentials {
+  padding: .625rem .75rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--field-radius, 3px);
+}
+.backup-mirror-form__credentials > summary { cursor: pointer; }
+.backup-mirror-form__credentials[open] > .backup-mirror-form__fields { margin-block-start: .75rem; }
+.backup-mirror-form [hidden] { display: none; }
+.backup-mirror-form > .button { justify-self: start; }
 .panel-empty {
   display: grid;
   align-items: center;

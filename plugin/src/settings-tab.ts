@@ -309,6 +309,41 @@ export class OSSSettingTab extends PluginSettingTab {
 
     heading(this.plugin.t("settings.sync.title"));
 
+    row(this.plugin.t("settings.sync.configuration"), this.plugin.t("settings.sync.configurationDesc"), (setting) => {
+      setting.addToggle((toggle) => toggle.setValue(this.plugin.settings.syncConfiguration).onChange(async (enabled) => {
+        this.plugin.settings.syncConfiguration = enabled;
+        await this.applySyncPathSettings();
+      }));
+    });
+
+    row(this.plugin.t("settings.sync.autoResolveConfiguration"), this.plugin.t("settings.sync.autoResolveConfigurationDesc"), (setting) => {
+      setting.addToggle((toggle) => toggle.setValue(this.plugin.settings.autoResolveConfiguration).onChange(async (enabled) => {
+        this.plugin.settings.autoResolveConfiguration = enabled;
+        await this.applySyncPathSettings();
+      }));
+    });
+
+    row(this.plugin.t("settings.sync.communityPlugins"), this.plugin.t("settings.sync.communityPluginsDesc"), (setting) => {
+      setting.addToggle((toggle) => toggle.setValue(this.plugin.settings.syncCommunityPlugins).onChange(async (enabled) => {
+        this.plugin.settings.syncCommunityPlugins = enabled;
+        await this.applySyncPathSettings();
+      }));
+    });
+
+    for (const { field, name, desc } of [
+      { field: "syncExclusions", name: "settings.sync.exclusions", desc: "settings.sync.exclusionsDesc" },
+      { field: "syncWhitelist", name: "settings.sync.whitelist", desc: "settings.sync.whitelistDesc" },
+    ] as const) {
+      row(this.plugin.t(name), this.plugin.t(desc), (setting) => {
+        let value = this.plugin.settings[field];
+        setting.addTextArea((text) => text.setValue(value).onChange((draft) => { value = draft; }));
+        setting.addButton((button) => button.setButtonText(this.plugin.t("common.save")).onClick(async () => {
+          this.plugin.settings[field] = value.trim();
+          await this.applySyncPathSettings();
+        }));
+      });
+    }
+
     row(this.plugin.t("settings.sync.interval"), this.plugin.t("settings.sync.intervalDesc"), (setting) => {
       setting
         .addText((text) =>
@@ -495,6 +530,14 @@ export class OSSSettingTab extends PluginSettingTab {
     else this.renderLegacySettings();
   }
 
+  private async applySyncPathSettings(): Promise<void> {
+    await this.plugin.saveSettings();
+    this.plugin.syncEngine.resetPolling();
+    if (this.plugin.isLoggedIn() && this.plugin.settings.vaultId) {
+      void this.plugin.syncEngine.runOnce({ forceFull: true });
+    }
+  }
+
   private createSettingsBlock(setting: Setting): HTMLElement {
     setting.setClass("oss-settings-block");
     return setting.controlEl.createDiv();
@@ -566,9 +609,6 @@ export class OSSSettingTab extends PluginSettingTab {
 
   /** 服务端更新分区：状态检查与触发更新串行执行，更新期间禁用检查与触发按钮 */
   private renderServerUpdateSection(containerEl: HTMLElement): void {
-    containerEl.createEl("p", { text: this.plugin.t("settings.serverUpdate.desc"), cls: "setting-item-description" });
-
-
     let currentVersion = this.plugin.t("common.unknown");
     let latestVersion: string | null = null;
     let checkId: string | null = null;
@@ -578,8 +618,8 @@ export class OSSSettingTab extends PluginSettingTab {
     let isPolling = false;
 
     const versionSetting = new Setting(containerEl)
-      .setName(this.plugin.t("settings.serverUpdate.statusLabel"))
-      .setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));
+      .setName(this.plugin.t("settings.serverUpdate.currentLabel"))
+      .setDesc(currentVersion);
 
     const statusSetting = new Setting(containerEl)
       .setName(this.plugin.t("settings.serverUpdate.statusLabel"))
@@ -628,12 +668,12 @@ export class OSSSettingTab extends PluginSettingTab {
         isPolling = false;
         if (outcome.kind === "success") {
           currentVersion = outcome.version;
-          versionSetting.setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));
+          versionSetting.setDesc(currentVersion);
           statusSetting.setDesc(this.plugin.t("settings.serverUpdate.success", { version: outcome.version }));
           new Notice(this.plugin.t("notice.serverUpdateSuccess", { version: outcome.version }));
         } else if (outcome.kind === "rolled_back") {
           currentVersion = outcome.currentVersion;
-          versionSetting.setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));
+          versionSetting.setDesc(currentVersion);
           statusSetting.setDesc(this.plugin.t("settings.serverUpdate.rolledBack", { version: outcome.currentVersion }));
           new Notice(this.plugin.t("notice.serverUpdateRolledBack", { version: outcome.currentVersion }));
         } else if (outcome.kind === "failed") {
@@ -662,7 +702,7 @@ export class OSSSettingTab extends PluginSettingTab {
 
     void this.plugin.getServerVersion().then((info) => {
       currentVersion = info.version ?? currentVersion;
-      versionSetting.setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));
+      versionSetting.setDesc(currentVersion);
     }).catch((error: unknown) => {
       if (isAuthError(error)) {
         versionSetting.setDesc(this.plugin.t("settings.serverUpdate.staleRole"));
@@ -672,7 +712,7 @@ export class OSSSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.serverUpdate.check"))
-      .setDesc(this.plugin.t("settings.serverUpdate.statusIdle"))
+      .setDesc(this.plugin.t("settings.serverUpdate.desc"))
       .addButton((button) => {
         checkButton = button;
         button.setButtonText(this.plugin.t("settings.serverUpdate.check")).onClick(async () => {
@@ -687,7 +727,7 @@ export class OSSSettingTab extends PluginSettingTab {
             latestVersion = check.latest_version;
             checkId = check.check_id;
             candidateVersion = check.candidate?.version ?? latestVersion;
-            versionSetting.setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));
+            versionSetting.setDesc(currentVersion);
             if (check.update_available && candidateVersion && checkId) {
               statusSetting.setDesc(this.plugin.t("settings.serverUpdate.available", { from: currentVersion, to: candidateVersion }));
               refreshTrigger();
@@ -717,7 +757,7 @@ export class OSSSettingTab extends PluginSettingTab {
     void this.plugin.getServerUpdateStatus().then((s) => {
       const state = s.state ?? s.last_update?.state ?? "idle";
       currentVersion = s.version ?? currentVersion;
-      versionSetting.setDesc(this.plugin.t("settings.serverUpdate.current", { version: currentVersion }));
+      versionSetting.setDesc(currentVersion);
       if (s.last_update?.state) {
         statusSetting.setDesc(`${state}: ${s.last_update.phase ?? s.last_update.state}`);
       }

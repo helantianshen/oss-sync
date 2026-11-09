@@ -27,7 +27,7 @@ type collabOut struct {
 	Status        string `json:"status"`
 	// AllowHistoryView 协作者是否可读该文件的修改记录
 	AllowHistoryView bool   `json:"allow_history_view"`
-	CreatedAt         string `json:"created_at"`
+	CreatedAt        string `json:"created_at"`
 }
 
 func (h *Handler) collabOuts(rows []models.Collaboration) ([]collabOut, error) {
@@ -117,7 +117,7 @@ func (h *Handler) CollabList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"collaborations": out})
+	c.JSON(http.StatusOK, gin.H{"collaborations": out, "presence_v1": true, "presence_read_v1": true})
 }
 
 // CollabInbox 列出当前用户收到的跨仓库协作关系
@@ -146,8 +146,8 @@ func (h *Handler) CollabInvite(c *gin.Context) {
 		return
 	}
 	var req struct {
-		FilePath  string `json:"file_path" binding:"required"`
-		Username  string `json:"username" binding:"required"`
+		FilePath string `json:"file_path" binding:"required"`
+		Username string `json:"username" binding:"required"`
 		// AllowHistoryView 协作者是否可读该文件的修改记录，缺省不允许
 		AllowHistoryView bool `json:"allow_history_view"`
 	}

@@ -96,3 +96,48 @@ test("完整扫描仍排除移动的两端和已有冲突，不下载覆盖或�
     removedBaselinePaths: [],
   });
 });
+
+test("自动配置首次采用云端，之后用校正过的时间选较新配置，普通笔记仍进入冲突处理", async (t) => {
+  const { planOrdinarySyncActions } = await loadSource(t, "ordinary-sync-action-planner");
+  const path = ".custom/appearance.json";
+  const note = "edited.md";
+  const operation = { id: "config-edit", kind: "upsert", path, createdAt: 240 };
+  const cloud = remote(path, { type: "config", mtime: 300 });
+  const edited = { ...local(path, "local-edit"), mtime: 280 };
+  const plan = (extra) => planOrdinarySyncActions(input({
+    configDir: ".custom", autoConfigurationTimeOffset: 30, forceFull: true,
+    pending: [operation], localByPath: new Map([[path, edited]]),
+    remote: new Map([[path, cloud]]),
+    ...extra,
+  })).actions;
+
+  assert.equal(plan({})[0].kind, "download");
+  const baseline = new Map([[path, base()]]);
+  assert.deepEqual(plan({ baseline }), [
+    { kind: "upload", path, local: edited, baseRevision: cloud.revision, operationID: operation.id, operation },
+  ]);
+  assert.equal(plan({ baseline, autoConfigurationTimeOffset: 20 })[0].kind, "download");
+  assert.equal(plan({ baseline, autoConfigurationTimeOffset: undefined })[0].kind, "reconcile");
+  const twoPaths = plan({
+    baseline: new Map([[path, base()], [note, base()]]),
+    localByPath: new Map([[path, edited], [note, local(note, "local-edit")]]),
+    remote: new Map([[path, cloud], [note, remote(note)]]),
+  });
+  assert.equal(twoPaths.find((action) => action.path === note).kind, "reconcile");
+});
+
+test("配置删除参与最新版本判断，同时间优先云端", async (t) => {
+  const { planOrdinarySyncActions } = await loadSource(t, "ordinary-sync-action-planner");
+  const path = ".obsidian/appearance.json";
+  const cloud = remote(path, { type: "config" });
+  const plan = (createdAt) => planOrdinarySyncActions(input({
+    autoConfigurationTimeOffset: 10,
+    baseline: new Map([[path, base()]]),
+    remote: new Map([[path, cloud]]),
+    pending: [{ id: "delete-config", kind: "delete", path, createdAt }],
+  })).actions[0];
+  assert.equal(plan(290).kind, "download");
+  const deletion = plan(291);
+  assert.equal(deletion.kind, "delete_remote");
+  assert.equal(deletion.baseRevision, cloud.revision);
+});

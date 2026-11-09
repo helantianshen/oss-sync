@@ -1,4 +1,4 @@
-import { classifySyncPath } from "./blacklist.js";
+import { classifySyncPath, configurationRelativePath } from "./blacklist.js";
 import type { BaselineEntry, PendingOperation } from "./baseline.js";
 import type { SyncFileMeta } from "./api.js";
 import type { ExpectedLocalState, OrdinarySyncAction, OrdinarySyncLocalMeta, OrdinarySyncPlannerInput, OrdinarySyncPlanResult } from "./ordinary-sync-actions.js";
@@ -18,6 +18,16 @@ function compactedDelete(path: string, configDir: string): SyncFileMeta {
 function expected(local: OrdinarySyncLocalMeta | null): ExpectedLocalState {
   if (local === null) return { kind: "absent" };
   return { kind: "hash", hash: local.hash };
+}
+
+function acceptConfiguration(
+  path: string, local: OrdinarySyncLocalMeta | null, server: SyncFileMeta,
+): OrdinarySyncAction {
+  const expectedLocal = expected(local);
+  if (server.deleted) return local ? { kind: "delete_local", path, remote: server, expectedLocal }
+    : { kind: "adopt", path, local, remote: server, expectedLocal };
+  return local?.hash === server.hash ? { kind: "adopt", path, local, remote: server, expectedLocal }
+    : { kind: "download", path, remote: server, expectedLocal };
 }
 
 /** 忽略冲突与重命名路径，完整同步时纳入本地和基线路径 */
@@ -72,8 +82,12 @@ export function planOrdinarySyncActions(input: OrdinarySyncPlannerInput): Ordina
     // 增量同步下 remote 不含未变更路径，用基线还原一份服务端视图；完整快照时不能补，否则会把已删除的远端当作存在
     const server = submitted ?? (!forceFull && base !== null ? remoteFromBaseline(path, base, input.configDir) : undefined);
     const operation = pendingByPath.get(path);
+    const offset = input.autoConfigurationTimeOffset;
+    const autoConfiguration = offset !== undefined && configurationRelativePath(path, input.configDir) !== null;
     if (base === null) {
-      if (operation?.kind === "delete") {
+      if (autoConfiguration && server !== undefined) {
+        actions.push(acceptConfiguration(path, local, server));
+      } else if (operation?.kind === "delete") {
         if (server !== undefined && !server.deleted) {
           actions.push({ kind: "delete_remote", path, baseRevision: server.revision, operationID: operation.id, operation });
         } else if (server?.deleted === true && local === null) {
@@ -107,6 +121,8 @@ export function planOrdinarySyncActions(input: OrdinarySyncPlannerInput): Ordina
         if (operation !== undefined) obsoleteSet.add(operation.id);
       } else if (local.hash === base.serverHash) {
         actions.push({ kind: "delete_local_absent", path, expectedLocal: expected(local) });
+      } else if (autoConfiguration) {
+        actions.push({ kind: "upload", path, local, baseRevision: 0, operationID: operation?.id ?? createOperationId(), operation });
       } else {
         actions.push({ kind: "conflict", path, local, remote: compactedDelete(path, input.configDir), expectedLocal: expected(local) });
       }
@@ -132,6 +148,14 @@ export function planOrdinarySyncActions(input: OrdinarySyncPlannerInput): Ordina
     }
     if (local !== null && server !== undefined && !server.deleted && local.hash === server.hash) {
       actions.push({ kind: "adopt", path, local, remote: server, expectedLocal: expected(local) });
+    } else if (autoConfiguration && server !== undefined) {
+      const changedAt = local?.mtime ?? (operation?.kind === "delete" ? operation.createdAt : 0);
+      if (changedAt > 0 && changedAt + offset > server.mtime) {
+        const operationID = operation?.id ?? createOperationId();
+        if (local) actions.push({ kind: "upload", path, local, baseRevision: server.revision, operationID, operation });
+        else if (!server.deleted) actions.push({ kind: "delete_remote", path, baseRevision: server.revision, operationID, operation });
+        else actions.push(acceptConfiguration(path, local, server));
+      } else actions.push(acceptConfiguration(path, local, server));
     } else if (local !== null && server !== undefined && !server.deleted) {
       actions.push({ kind: "reconcile", path, local, remote: server, expectedLocal: expected(local) });
     } else if (server !== undefined) {

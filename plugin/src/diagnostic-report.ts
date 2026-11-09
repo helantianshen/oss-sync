@@ -75,7 +75,7 @@ interface ReportInput {
 /** 显式列出可导出的环境与设置，不序列化插件数据、凭据或笔记正文。 */
 export function createDiagnosticReport(input: ReportInput, secrets: readonly string[] = []): string {
   const settings: Record<string, unknown> = {};
-  for (const key of ["syncIntervalSec", "maxConcurrency", "incrementalCheck", "remotePollIntervalSec", "forceSSE", "diagnosticsEnabled", "vaultSyncMode", "language"]) {
+  for (const key of ["syncIntervalSec", "maxConcurrency", "incrementalCheck", "remotePollIntervalSec", "forceSSE", "diagnosticsEnabled", "vaultSyncMode", "language", "syncConfiguration", "autoResolveConfiguration", "syncCommunityPlugins"]) {
     const value = input.settings[key];
     if (["string", "number", "boolean"].includes(typeof value)) settings[key] = value;
   }

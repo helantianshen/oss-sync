@@ -37,11 +37,12 @@ import (
 
 // Handler 持有同步路由所需的数据库、修订信号和协作事件
 type Handler struct {
-	DB      *gorm.DB
-	Cfg     *config.Config
-	signals sync.Map
-	broker  *collaboration.Broker
-	collab  *collaboration.Service
+	DB       *gorm.DB
+	Cfg      *config.Config
+	signals  sync.Map
+	broker   *collaboration.Broker
+	collab   *collaboration.Service
+	presence collaborationPresence
 }
 
 // New 为同一服务实例创建共享的同步处理器
@@ -70,6 +71,8 @@ func (h *Handler) Register(r *gin.Engine) {
 		v2.POST("/ack", h.V2Ack)
 		v2.POST("/upload", h.V2Upload)
 		v2.GET("/download", h.V2Download)
+		v2.GET("/delta-base", h.V2DeltaBase)
+		v2.POST("/download-delta", h.V2DownloadDelta)
 		v2.POST("/delete", h.V2Delete)
 		v2.POST("/rename", h.V2Rename)
 		v2.GET("/strategy", h.V2Strategy)
@@ -95,6 +98,8 @@ func (h *Handler) Register(r *gin.Engine) {
 		collab.POST("/:collab_id/leave", h.CollabLeave)
 		collab.GET("/files/:file_id/content", h.CollabContent)
 		collab.POST("/files/:file_id/upload", h.CollabUpload)
+		collab.POST("/files/:file_id/presence", h.CollabPresence)
+		collab.GET("/files/:file_id/presence", h.CollabPresence)
 	}
 	collabInbox := r.Group("/api/collaborations", auth.Middleware(h.DB, h.Cfg))
 	{

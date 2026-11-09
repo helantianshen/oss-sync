@@ -63,6 +63,7 @@ type v2ManifestResponse struct {
 	RecoverySnapshot  bool         `json:"recovery_snapshot"`
 	ServerTime        int64        `json:"server_time"`
 	Files             []V2FileMeta `json:"files"`
+	DeltaV1           bool         `json:"delta_v1"`
 }
 
 type v2DeleteRequest struct {
@@ -203,6 +204,7 @@ func (h *Handler) v2ListChanges(c *gin.Context, manifest bool) {
 		nextCursor = state.HeadRevision
 	}
 	c.JSON(http.StatusOK, v2ManifestResponse{
+		DeltaV1:           true,
 		SnapshotRevision:  state.HeadRevision,
 		CompactedRevision: state.CompactedRevision,
 		NextCursor:        nextCursor,
@@ -274,8 +276,10 @@ func (h *Handler) V2Upload(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !strings.HasPrefix(c.GetHeader("Content-Type"), "application/octet-stream") {
-		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "Content-Type must be application/octet-stream"})
+	contentType := c.GetHeader("Content-Type")
+	isDelta := contentType == deltaContentType
+	if !isDelta && !strings.HasPrefix(contentType, "application/octet-stream") {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported sync upload content type"})
 		return
 	}
 	path, valid := normalizeRelativePath(c.Query("path"))
@@ -325,6 +329,20 @@ func (h *Handler) V2Upload(c *gin.Context) {
 		return
 	}
 
+	var patch []byte
+	baseHash := c.Query("base_hash")
+	if isDelta {
+		if classifyFile(path) != "markdown" || baseRevision == 0 || declaredHash == "" || len(baseHash) != 64 || !isHex(baseHash) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": errInvalidDelta.Error(), "code": "delta_invalid"})
+			return
+		}
+		patch, err = readDeltaBytes(c.Request.Body, min(maxBytes, deltaMaxBytes))
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": errInvalidDelta.Error(), "code": "delta_invalid"})
+			return
+		}
+	}
+
 	tmpDir := filepath.Join(h.Cfg.Storage.DataDir, "vaults", vault.ID, "tmp")
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -338,18 +356,35 @@ func (h *Handler) V2Upload(c *gin.Context) {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 
-	hasher := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(tmp, hasher), io.LimitReader(c.Request.Body, maxBytes+1))
-	closeErr := tmp.Close()
-	if copyErr != nil || closeErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store upload"})
-		return
+	var written, extraReserve int64
+	actualHash := declaredHash
+	if isDelta {
+		closeErr := tmp.Close()
+		written, err = markdownDeltaSize(patch)
+		if closeErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store upload"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "code": "delta_invalid"})
+			return
+		}
+		extraReserve = written
+	} else {
+		hasher := sha256.New()
+		var copyErr error
+		written, copyErr = io.Copy(io.MultiWriter(tmp, hasher), io.LimitReader(c.Request.Body, maxBytes+1))
+		closeErr := tmp.Close()
+		if copyErr != nil || closeErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store upload"})
+			return
+		}
+		actualHash = hex.EncodeToString(hasher.Sum(nil))
 	}
 	if written > maxBytes {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds configured size limit"})
 		return
 	}
-	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if declaredHash != "" && declaredHash != actualHash {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "content hash mismatch"})
 		return
@@ -372,7 +407,7 @@ func (h *Handler) V2Upload(c *gin.Context) {
 	var backupPath string
 	moved := false
 
-	err = storagequota.WithinLimit(h.Cfg.Storage.DataDir, h.Cfg.Storage.MaxTotalSizeBytes(), historySnapshotReserve(targetPath), func() error {
+	err = storagequota.WithinLimit(h.Cfg.Storage.DataDir, h.Cfg.Storage.MaxTotalSizeBytes(), historySnapshotReserve(targetPath)+extraReserve, func() error {
 		return h.DB.Transaction(func(tx *gorm.DB) error {
 			current, exists, err := lockedFile(tx, vault.OwnerID, vault.ID, path)
 			if err != nil {
@@ -411,6 +446,14 @@ func (h *Handler) V2Upload(c *gin.Context) {
 				PolicyLimit: effective.VaultStorageBytes,
 			}); err != nil {
 				return err
+			}
+			if isDelta {
+				if !exists || current.IsDeleted || current.Hash != baseHash {
+					return errDeltaBase
+				}
+				if err := writePatchedUpload(h.fileDiskPath(current), tmpPath, baseHash, actualHash, patch); err != nil {
+					return err
+				}
 			}
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 				return err
@@ -476,6 +519,10 @@ func (h *Handler) V2Upload(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "revision conflict", "current": v2Meta(conflict)})
 			return
 		}
+		if errors.Is(err, errInvalidDelta) || errors.Is(err, errDeltaBase) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "code": "delta_invalid"})
+			return
+		}
 		if errors.Is(err, storagequota.ErrExceeded) {
 			c.JSON(http.StatusInsufficientStorage, gin.H{"error": "project storage quota exceeded", "code": "project_storage_quota_exceeded"})
 			return
@@ -499,6 +546,18 @@ func (h *Handler) V2Upload(c *gin.Context) {
 }
 
 func (h *Handler) V2Download(c *gin.Context) {
+	h.v2Download(c, "")
+}
+
+func (h *Handler) V2DeltaBase(c *gin.Context) {
+	h.v2Download(c, deltaSignatureType)
+}
+
+func (h *Handler) V2DownloadDelta(c *gin.Context) {
+	h.v2Download(c, deltaContentType)
+}
+
+func (h *Handler) v2Download(c *gin.Context, representation string) {
 	u, vault, ok := h.requireV2Vault(c)
 	if !ok {
 		return
@@ -549,13 +608,17 @@ func (h *Handler) V2Download(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.Header("Content-Type", "application/octet-stream")
-	c.Header("Content-Length", strconv.FormatInt(stat.Size(), 10))
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
 	c.Header("ETag", `"`+file.Hash+`"`)
 	c.Header("X-OSS-Hash", file.Hash)
 	c.Header("X-OSS-MTime", strconv.FormatInt(file.MTime, 10))
 	c.Header("X-OSS-Revision", strconv.FormatInt(file.Revision, 10))
+	if representation != "" {
+		serveMarkdownDelta(c, fh, stat.Size(), file, representation)
+		return
+	}
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Length", strconv.FormatInt(stat.Size(), 10))
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
 	c.Status(http.StatusOK)
 	_, _ = io.Copy(c.Writer, fh)
 }

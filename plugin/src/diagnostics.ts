@@ -51,6 +51,11 @@ export type DiagnosticEvent =
       readonly scope: "upload" | "download" | "collab_upload" | "collab_download";
       readonly durationMs: number;
       readonly bytes?: number;
+      readonly path?: string;
+      readonly mode?: "delta" | "full";
+      readonly fullBytes?: number;
+      readonly signatureBytes?: number;
+      readonly patchBytes?: number;
     }
   | { readonly kind: "collab_activity"; readonly at: number; readonly entries: number; readonly newestCreatedAt?: string }
   | {
@@ -223,6 +228,11 @@ function sanitizeEvent(event: DiagnosticEvent): DiagnosticEvent | null {
         scope: event.scope,
         durationMs: finiteNumber(event.durationMs),
         ...(typeof event.bytes === "number" ? { bytes: finiteNumber(event.bytes) } : {}),
+        ...(typeof event.path === "string" ? { path: truncate(redactDiagnosticText(event.path), 600) } : {}),
+        ...(event.mode === "delta" || event.mode === "full" ? { mode: event.mode } : {}),
+        ...(typeof event.fullBytes === "number" ? { fullBytes: finiteNumber(event.fullBytes) } : {}),
+        ...(typeof event.signatureBytes === "number" ? { signatureBytes: finiteNumber(event.signatureBytes) } : {}),
+        ...(typeof event.patchBytes === "number" ? { patchBytes: finiteNumber(event.patchBytes) } : {}),
       };
     case "collab_activity":
       return {

@@ -1,6 +1,7 @@
 import { TFile } from "obsidian";
 import type { Vault } from "obsidian";
 import { normalizePath } from "./baseline.js";
+import { configurationRelativePath } from "./blacklist.js";
 import type { ExpectedLocalState } from "./ordinary-sync-actions.js";
 
 /** 本地读取快照；hash 为 SHA-256 十六进制 */
@@ -64,6 +65,12 @@ export class OrdinarySyncFileAccess {
   /** 读取文件快照；路径不存在或不是普通文件时返回 null */
   async readExact(path: string): Promise<LocalReadResult | null> {
     const key = normalizePath(path);
+    if (this.isConfiguration(key)) {
+      const stat = await this.vault.adapter.stat(key);
+      if (stat?.type !== "file") return null;
+      const bytes = new Uint8Array(await this.vault.adapter.readBinary(key));
+      return { bytes, hash: await hashBytes(bytes), mtime: stat.mtime, size: bytes.byteLength };
+    }
     const file = this.vault.getAbstractFileByPath(key);
     if (!(file instanceof TFile)) {
       return null;
@@ -94,7 +101,8 @@ export class OrdinarySyncFileAccess {
     }
     const fresh = freshBuffer(bytes);
     this.suppress(key);
-    await this.vault.createBinary(key, fresh);
+    if (this.isConfiguration(key)) await this.vault.adapter.writeBinary(key, fresh);
+    else await this.vault.createBinary(key, fresh);
     const snapshot = await this.snapshotFromBytes(bytes, key);
     return { kind: "created", snapshot };
   }
@@ -110,13 +118,15 @@ export class OrdinarySyncFileAccess {
     if (actual === null) {
       return { kind: "stale", actual };
     }
-    const file = this.vault.getAbstractFileByPath(key);
-    if (!(file instanceof TFile)) {
-      return { kind: "stale", actual };
-    }
     const fresh = freshBuffer(bytes);
     this.suppress(key);
-    await this.vault.modifyBinary(file, fresh);
+    if (this.isConfiguration(key)) {
+      await this.vault.adapter.writeBinary(key, fresh);
+    } else {
+      const file = this.vault.getAbstractFileByPath(key);
+      if (!(file instanceof TFile)) return { kind: "stale", actual };
+      await this.vault.modifyBinary(file, fresh);
+    }
     const snapshot = await this.snapshotFromBytes(bytes, key);
     return { kind: "replaced", snapshot };
   }
@@ -129,7 +139,12 @@ export class OrdinarySyncFileAccess {
       return { kind: "stale", actual };
     }
     if (actual === null) {
-      await this.removeEmptyParentFolders(key);
+      if (!this.isConfiguration(key)) await this.removeEmptyParentFolders(key);
+      return { kind: "deleted" };
+    }
+    if (this.isConfiguration(key)) {
+      this.suppress(key);
+      await this.vault.adapter.remove(key);
       return { kind: "deleted" };
     }
     const file = this.vault.getAbstractFileByPath(key);
@@ -178,14 +193,15 @@ export class OrdinarySyncFileAccess {
       return { kind: "stale", reason: "missing", actual };
     }
     const siblingPath = conflictCopyPath(key, this.now());
-    const existing = this.vault.getAbstractFileByPath(siblingPath);
-    if (existing !== null) {
+    const config = this.isConfiguration(siblingPath);
+    if (config ? await this.vault.adapter.exists(siblingPath) : this.vault.getAbstractFileByPath(siblingPath) !== null) {
       return { kind: "collision", siblingPath };
     }
     await this.ensureParentFolders(siblingPath);
     const fresh = freshBuffer(localBytes);
     this.suppress(siblingPath);
-    await this.vault.createBinary(siblingPath, fresh);
+    if (config) await this.vault.adapter.writeBinary(siblingPath, fresh);
+    else await this.vault.createBinary(siblingPath, fresh);
     const snapshot = await this.snapshotFromBytes(localBytes, siblingPath);
     return { kind: "preserved", siblingPath, snapshot };
   }
@@ -203,6 +219,10 @@ export class OrdinarySyncFileAccess {
   private async snapshotFromBytes(bytes: Uint8Array, path: string): Promise<LocalReadResult> {
     const snapshotBytes = bytes.slice();
     const snapshotHash = await hashBytes(snapshotBytes.slice());
+    if (this.isConfiguration(path)) {
+      const stat = await this.vault.adapter.stat(path);
+      return { bytes: snapshotBytes, hash: snapshotHash, mtime: stat?.mtime ?? 0, size: snapshotBytes.byteLength };
+    }
     const created = this.vault.getAbstractFileByPath(path);
     let mtime = 0;
     let size = snapshotBytes.length;
@@ -238,8 +258,19 @@ export class OrdinarySyncFileAccess {
     const parts = normalizePath(path).split("/");
     parts.pop();
     let current = "";
+    const config = this.isConfiguration(path);
     for (const part of parts) {
       current = current ? `${current}/${part}` : part;
+      if (config) {
+        if (!(await this.vault.adapter.exists(current))) {
+          try {
+            await this.vault.adapter.mkdir(current);
+          } catch (error) {
+            if ((await this.vault.adapter.stat(current))?.type !== "folder") throw error;
+          }
+        }
+        continue;
+      }
       if (this.vault.getAbstractFileByPath(current) === null) {
         try {
           await this.vault.createFolder(current);
@@ -250,6 +281,10 @@ export class OrdinarySyncFileAccess {
         }
       }
     }
+  }
+
+  private isConfiguration(path: string): boolean {
+    return configurationRelativePath(path, this.vault.configDir) !== null;
   }
 }
 

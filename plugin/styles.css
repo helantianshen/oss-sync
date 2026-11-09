@@ -205,8 +205,12 @@
   object-fit: contain;
 }
 
-.setting-item.oss-settings-block {
+.setting-item.oss-settings-block,
+.setting-group .setting-item.oss-settings-block {
   display: block;
+  padding: 0;
+  background: transparent;
+  border: 0;
 }
 
 .setting-item.oss-settings-block > .setting-item-info {
@@ -216,6 +220,11 @@
 .setting-item.oss-settings-block > .setting-item-control {
   display: block;
   width: 100%;
+  text-align: start;
+}
+
+.oss-settings-block .setting-item .setting-item-control:empty {
+  display: none;
 }
 
 .oss-settings-brand {
@@ -223,6 +232,7 @@
   align-items: center;
   gap: 12px;
   margin-block-end: 24px;
+  padding: var(--setting-items-padding-y, var(--size-4-4)) var(--setting-items-padding-x, var(--size-4-4));
 }
 
 .oss-settings-brand img {
@@ -670,4 +680,21 @@
 .oss-collab-detail-modal .oss-collaborators-actions {
   justify-content: flex-end;
   margin-block-end: 6px;
+}
+
+.oss-collaboration-cursor {
+  position: relative;
+  display: inline-block;
+  width: 0;
+}
+
+.oss-collaboration-caret {
+  position: absolute;
+  inset-inline-start: -4px;
+  bottom: -0.18em;
+  width: 8px;
+  height: 1.12em;
+  color: var(--oss-cursor-color);
+  border-block: 1px solid currentColor;
+  background: linear-gradient(currentColor, currentColor) center / 2px 100% no-repeat;
 }
