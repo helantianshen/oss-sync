@@ -87,7 +87,13 @@ Production configuration defaults to port `8080`. See [deployment](docs/deployme
 5. Select an existing Vault in plugin settings, or create one and perform the first full sync.
 6. Subsequent edits enter the durable queue; remote changes arrive through polling. Review the sync scope before enabling `.obsidian` configuration sync.
 
-The Vault-root `.oss-sync-state.json` (v3) stores baselines, pending work, and conflicts; it is never uploaded. The client checks for new versions and points to the community plugin marketplace; it does not download or replace plugin files itself.
+The Vault-root `.oss-sync-state.json` (v3) stores baselines, pending work, and conflicts locally.
+
+### Obsidian plugin network and data access
+
+- The plugin requires an account on the OSS Sync server you configure. It connects to that server for login, file sync, collaboration, sharing, and server administration.
+- The plugin reads the public version manifest from `raw.githubusercontent.com` at startup and every 30 minutes while running to notify you about updates in the Obsidian community plugin marketplace.
+- The plugin enumerates files in the current vault to plan synchronization and applies the configured sync scope before transfer. The **Copy link** action writes the share URL to the system clipboard.
 
 ## Plugins, blog templates, and console themes
 
