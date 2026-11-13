@@ -131,6 +131,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	r.GET("/p/:share_id/*subpath", h.handleFolder)
 	r.GET("/assets/:share_id", h.handleSharedAsset)
 	r.GET("/themes/:theme/*filepath", h.handleThemeAsset)
+	r.GET(articleFrameScriptURL, serveArticleFrameScript)
 }
 
 // shareResolver 实现 markdown.LinkResolver
@@ -428,27 +429,6 @@ func isValidShareVisibility(visibility string) bool {
 	}
 }
 
-// sandboxArticleHTML 把允许原始 HTML 的文章正文包进 sandbox iframe
-// 仅授予 allow-scripts：iframe 处于独立源，脚本无法读取父页 cookie、localStorage 或 DOM
-// 样式通过同源的 style.css 注入，保持与主题一致
-func sandboxArticleHTML(content, themeBaseURL string) string {
-	styleHref := ""
-	if themeBaseURL != "" {
-		styleHref = `<link rel="stylesheet" href="` + htmlEscape(themeBaseURL+"/style.css") + `">`
-	}
-	return `<iframe class="oss-article-sandbox" title="文章内容" loading="lazy" ` +
-		`sandbox="allow-scripts" ` +
-		`srcdoc="` + htmlEscapeAttribute(sandboxDocument(styleHref, content)) + `"></iframe>`
-}
-
-// sandboxDocument 组装 iframe 内的完整 HTML 文档
-// body 带 oss-content 类以继承主题的正文排版规则
-func sandboxDocument(head, body string) string {
-	return "<!doctype html><html><head><meta charset=\"utf-8\">" + head +
-		"<style>html{color-scheme:light dark}body{margin:0;background:transparent}</style>" +
-		"</head><body class=\"oss-content\">" + body + "</body></html>"
-}
-
 // shareVisible 检查当前请求是否有权访问该分享
 // public 任何人可看；password 需提交密码或持有该分享的授权令牌；login 需已登录
 func (h *Handler) shareVisible(c *gin.Context, share models.Share) bool {
@@ -578,27 +558,16 @@ func (h *Handler) handleSingle(c *gin.Context) {
 	// 有效 frontmatter 作为元数据使用并从正文隐藏，损坏区块保留原文
 	fm, body := splitFrontmatter(raw)
 	us, _ := h.loadVaultSettings(share.UserID, share.VaultID)
-	var html string
-	if us.AllowRawHTML {
-		html, err = markdown.RenderMarkdownWithAssetsUnsafe(resolver, assetResolver, body)
-	} else {
-		html, err = markdown.RenderMarkdownWithAssets(resolver, assetResolver, body)
-	}
+	params := h.shareRenderParams(c, share, us)
+	params.ContentHTML, err = renderArticleBody(resolver, assetResolver, body, us.AllowRawHTML, params.ThemeBaseURL)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "render failed: %v", err)
 		return
 	}
 
-	params := h.shareRenderParams(c, share, us)
 	params.ArticleTitle, params.ArticlePost = buildArticleMeta(fm, body, f.Path, f.UpdatedAt, assetResolver.ResolveAsset)
 	params.FilePath = f.Path
 	params.Title = params.ArticleTitle + " · OSS"
-	if us.AllowRawHTML {
-		// 原始 HTML 可能含脚本，包进 sandbox iframe 隔离执行，不接触父页 cookie 与 DOM
-		params.ContentHTML = template.HTML(sandboxArticleHTML(html, params.ThemeBaseURL))
-	} else {
-		params.ContentHTML = template.HTML(html)
-	}
 	h.renderTemplate(c, params)
 }
 
@@ -678,26 +647,16 @@ func (h *Handler) renderFolderFile(c *gin.Context, share models.Share, f models.
 	assetResolver := blogAssetResolver{shareID: share.ShareID, markdownPath: f.Path}
 	fm, body := splitFrontmatter(raw)
 	us, _ := h.loadVaultSettings(share.UserID, share.VaultID)
-	var html string
-	if us.AllowRawHTML {
-		html, err = markdown.RenderMarkdownWithAssetsUnsafe(resolver, assetResolver, body)
-	} else {
-		html, err = markdown.RenderMarkdownWithAssets(resolver, assetResolver, body)
-	}
+	params := h.shareRenderParams(c, share, us)
+	params.ContentHTML, err = renderArticleBody(resolver, assetResolver, body, us.AllowRawHTML, params.ThemeBaseURL)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "render failed: %v", err)
 		return
 	}
 
-	params := h.shareRenderParams(c, share, us)
 	params.ArticleTitle, params.ArticlePost = buildArticleMeta(fm, body, f.Path, f.UpdatedAt, assetResolver.ResolveAsset)
 	params.FilePath = f.Path
 	params.Title = params.ArticleTitle + " · " + share.TargetPath
-	if us.AllowRawHTML {
-		params.ContentHTML = template.HTML(sandboxArticleHTML(html, params.ThemeBaseURL))
-	} else {
-		params.ContentHTML = template.HTML(html)
-	}
 	h.renderTemplate(c, params)
 }
 
