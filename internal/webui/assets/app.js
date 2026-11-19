@@ -6,6 +6,12 @@
     initSidebar();
     initThemeSwitcher();
     initLanguageSwitcher();
+    var pageController = new AbortController();
+    initConsoleNavigation(pageController);
+    initPage(pageController.signal);
+  });
+
+  function initPage(signal) {
     initConfirmForms();
     initFlashDismiss();
     initCollaborationSelection();
@@ -21,9 +27,9 @@
     initShareVisibility();
     initPluginGuideCopy();
     initPapertrailPreview();
-    initServerUpdate();
-    initModals();
-  });
+    initServerUpdate(signal);
+    initModals(signal);
+  }
 
   function initSidebar() {
     var toggle = document.getElementById("sidebar-toggle");
@@ -53,22 +59,24 @@
     }
 
     // 二级菜单：一级可折叠项带 aria-expanded 和方向箭头
-    document.querySelectorAll(".side-nav__toggle").forEach(function (btn) {
-      btn.addEventListener("click", function () {
+    if (sidebar) {
+      sidebar.addEventListener("click", function (e) {
+        var btn = e.target.closest(".side-nav__toggle");
+        if (!btn) return;
         var expanded = btn.getAttribute("aria-expanded") === "true";
         btn.setAttribute("aria-expanded", String(!expanded));
         var group = btn.closest(".side-nav__item");
         if (group) group.classList.toggle("is-open", !expanded);
       });
-    });
+    }
 
     function setActiveByHash() {
       var accountNavigation = document.querySelector("[data-account-navigation]");
       if (!accountNavigation || normalizePath(window.location.pathname) !== "/dashboard/account") return;
 
       var section = window.location.hash.substring(1) || "info";
-      var next = accountNavigation.querySelector('[data-account-section="' + section + '"]') ||
-        accountNavigation.querySelector('[data-account-section="info"]');
+      var links = Array.from(accountNavigation.querySelectorAll("[data-account-section]"));
+      var next = links.find(function (link) { return link.dataset.accountSection === section; }) || links[0];
       if (!next) return;
 
       accountNavigation.querySelectorAll(".side-nav__sublink").forEach(function (link) {
@@ -89,6 +97,102 @@
 
     setActiveByHash();
     window.addEventListener("hashchange", setActiveByHash);
+    document.addEventListener("oss:console-page-ready", setActiveByHash);
+  }
+
+  function initConsoleNavigation(pageController) {
+    var sidebar = document.getElementById("app-sidebar");
+    var content = document.querySelector(".console-content");
+    var title = document.querySelector(".console-title");
+    if (!sidebar || !content || !title || !window.history.pushState) return;
+    var activeRequest;
+    var currentPage = pageKey(new URL(window.location.href));
+
+    function pageKey(url) {
+      return url.pathname + url.search;
+    }
+
+    function dashboardURL(url) {
+      return url.origin === window.location.origin && (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"));
+    }
+
+    async function navigate(url, addHistory) {
+      if (activeRequest) activeRequest.abort();
+      var request = new AbortController();
+      activeRequest = request;
+      content.setAttribute("aria-busy", "true");
+      try {
+        var response = await fetch(url, { credentials: "same-origin", redirect: "error", signal: request.signal });
+        if (!response.ok || !response.headers.get("Content-Type")?.includes("text/html")) throw new Error("Invalid console response");
+        var next = new DOMParser().parseFromString(await response.text(), "text/html");
+        var nextContent = next.querySelector(".console-content");
+        var nextTitle = next.querySelector(".console-title");
+        var nextNav = next.querySelector("#app-sidebar .side-nav");
+        var nav = sidebar.querySelector(".side-nav");
+        var theme = 'link[href^="/ui/themes/"]';
+        if (!nextContent || !nextNav || !nextTitle || !nav ||
+            nextContent.querySelector('script:not([type="text/plain"])') ||
+            next.documentElement.lang !== document.documentElement.lang ||
+            next.querySelector(".console-identity")?.textContent !== document.querySelector(".console-identity")?.textContent ||
+            next.querySelector(theme)?.getAttribute("href") !== document.querySelector(theme)?.getAttribute("href")) {
+          throw new Error("Console layout changed");
+        }
+        if (request.signal.aborted) return;
+        if (addHistory) window.history.pushState(null, "", url);
+        currentPage = pageKey(url);
+        pageController.abort();
+        pageController = new AbortController();
+        title.textContent = nextTitle.textContent;
+        document.title = next.title;
+        var newNav = document.importNode(nextNav, true);
+        var scrollTop = nav.scrollTop;
+        nav.replaceWith(newNav);
+        newNav.scrollTop = scrollTop;
+        var newContent = document.importNode(nextContent, true);
+        content.replaceWith(newContent);
+        content = newContent;
+        initPage(pageController.signal);
+        document.dispatchEvent(new Event("oss:console-page-ready"));
+        var target = Array.from(content.querySelectorAll("[id]")).find(function (element) {
+          return "#" + encodeURIComponent(element.id) === url.hash || "#" + element.id === url.hash;
+        });
+        if (target) target.scrollIntoView();
+        else window.scrollTo(0, 0);
+        content.setAttribute("tabindex", "-1");
+        content.focus({ preventScroll: true });
+      } catch (error) {
+        if (!request.signal.aborted) {
+          if (addHistory) window.location.assign(url);
+          else window.location.reload();
+        }
+      } finally {
+        if (activeRequest === request) {
+          activeRequest = null;
+          content.removeAttribute("aria-busy");
+        }
+      }
+    }
+
+    sidebar.addEventListener("click", function (event) {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      var link = event.target.closest("a[href]");
+      if (!link || link.target || link.hasAttribute("download")) return;
+      var url = new URL(link.href);
+      if (!dashboardURL(url)) return;
+      if (pageKey(url) === pageKey(new URL(window.location.href))) {
+        if (activeRequest) activeRequest.abort();
+        if (url.href === window.location.href && currentPage === pageKey(url)) event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      void navigate(url, true);
+    });
+
+    window.addEventListener("popstate", function () {
+      if (activeRequest) activeRequest.abort();
+      var url = new URL(window.location.href);
+      if (dashboardURL(url) && pageKey(url) !== currentPage) void navigate(url, false);
+    });
   }
 
   function initPublicBlogThemeCapability() {
@@ -532,7 +636,7 @@
     refresh();
   }
 
-  function initServerUpdate() {
+  function initServerUpdate(signal) {
     var panel = document.querySelector("[data-update-panel]");
     if (!panel) return;
 
@@ -598,7 +702,8 @@
     }
 
     function fetchStatus() {
-      fetch("/dashboard/admin/system/update/status", { headers: { "X-CSRF-Token": csrf }, credentials: "same-origin" })
+      if (signal.aborted) return;
+      fetch("/dashboard/admin/system/update/status", { headers: { "X-CSRF-Token": csrf }, credentials: "same-origin", signal: signal })
         .then(function (response) { return response.json(); })
         .then(function (status) {
           capabilityReady = status.capability_ok === true;
@@ -626,7 +731,8 @@
     syncDownloadSource();
     if (sourceSelect) sourceSelect.addEventListener("change", syncDownloadSource);
     fetchStatus();
-    window.setInterval(fetchStatus, 5000);
+    var poll = window.setInterval(fetchStatus, 5000);
+    signal.addEventListener("abort", function () { window.clearInterval(poll); }, { once: true });
 
     checkBtn.addEventListener("click", function () {
       if (customProxyInput && customProxyInput.required && !customProxyInput.reportValidity()) return;
@@ -711,7 +817,7 @@
     });
   }
 
-  function initModals() {
+  function initModals(signal) {
     var FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
     function getFocusable(modal) {
@@ -768,7 +874,7 @@
         var modal = topModal();
         if (modal) closeModal(modal);
       }
-    });
+    }, { signal: signal });
 
     document.addEventListener("keydown", function (e) {
       if (e.key !== "Tab") return;
@@ -785,6 +891,6 @@
         e.preventDefault();
         first.focus();
       }
-    });
+    }, { signal: signal });
   }
 })();

@@ -1,6 +1,7 @@
 // metrics.js 刷新概览和管理员数据页上的实时服务器指标
 (function () {
   "use strict";
+  var controller;
 
   function formatBytes(bytes) {
     var units = ["B", "KB", "MB", "GB", "TB"];
@@ -14,10 +15,14 @@
   }
 
   function initSystemMetrics() {
+    if (controller) controller.abort();
+    controller = undefined;
     var container = document.querySelector("[data-system-metrics]");
     if (!container) return;
     var url = container.getAttribute("data-system-metrics-url");
     if (!url) return;
+    controller = new AbortController();
+    var signal = controller.signal;
 
     function setMetric(name, value) {
       var element = container.querySelector('[data-system-metric="' + name + '"]');
@@ -25,7 +30,7 @@
     }
 
     function refresh() {
-      window.fetch(url, { credentials: "same-origin" })
+      window.fetch(url, { credentials: "same-origin", signal: signal })
         .then(function (response) {
           if (!response.ok) throw new Error("live metrics request failed");
           return response.json();
@@ -47,7 +52,8 @@
     }
 
     refresh();
-    window.setInterval(refresh, 5000);
+    var poll = window.setInterval(refresh, 5000);
+    signal.addEventListener("abort", function () { window.clearInterval(poll); }, { once: true });
   }
 
   if (document.readyState === "loading") {
@@ -55,4 +61,5 @@
   } else {
     initSystemMetrics();
   }
+  document.addEventListener("oss:console-page-ready", initSystemMetrics);
 })();

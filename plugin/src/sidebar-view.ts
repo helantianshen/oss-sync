@@ -76,6 +76,12 @@ export class SidebarView extends ItemView {
   private renderStatus(): void {
     const { plugin } = this;
     const status = this.createSection(plugin.t("sidebar.status"));
+    const session = plugin.api.getSessionStatus();
+    status.createDiv({
+      cls: "oss-sidebar-status-line",
+      text: plugin.t(`sidebar.session.${session}`),
+    });
+    if (session !== "approved") return;
     status.createDiv({
       cls: "oss-sidebar-status-line",
       text: plugin.t("sidebar.user", {
@@ -106,7 +112,9 @@ export class SidebarView extends ItemView {
     const { plugin } = this;
     const actions = this.createSection(plugin.t("sidebar.actions"));
     const cluster = actions.createDiv({ cls: "oss-sidebar-actions oss-sidebar-actions--two-column" });
-    cluster.createEl("button", { text: plugin.t("sidebar.sync"), cls: "mod-cta" })
+    const syncButton = cluster.createEl("button", { text: plugin.t("sidebar.sync"), cls: "mod-cta" });
+    syncButton.disabled = plugin.api.getSessionStatus() !== "approved";
+    syncButton
       .addEventListener("click", () => {
         if (!plugin.settings.vaultId) {
           new Notice(plugin.t("notice.bindVaultFirst"));
@@ -124,7 +132,7 @@ export class SidebarView extends ItemView {
   private renderManagers(): void {
     const { plugin } = this;
     const section = this.createSection(plugin.t("sidebar.management"));
-    if (!plugin.settings.vaultId || !plugin.api.hasToken()) {
+    if (!plugin.settings.vaultId || plugin.api.getSessionStatus() !== "approved") {
       section.createDiv({ cls: "oss-sidebar-empty", text: plugin.t("sidebar.sharesUnavailable") });
       return;
     }
@@ -143,7 +151,7 @@ export class SidebarView extends ItemView {
   private renderRecycle(): void {
     const { plugin } = this;
     const section = this.createSection(plugin.t("sidebar.manageRecycle"));
-    if (!plugin.settings.vaultId || !plugin.api.hasToken()) {
+    if (!plugin.settings.vaultId || plugin.api.getSessionStatus() !== "approved") {
       section.createDiv({ cls: "oss-sidebar-empty", text: plugin.t("recycle.bindFirst") });
       return;
     }

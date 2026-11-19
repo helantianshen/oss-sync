@@ -28,6 +28,7 @@ const AUTH_CODE_KEYS: ReadonlyArray<readonly [string, TranslationKey]> = [
   ["device_unknown", "auth.deviceUnknown"],
   ["device_identity_required", "auth.deviceIdentityRequired"],
   ["device_identity_mismatch", "auth.deviceIdentityMismatch"],
+  ["share_target_missing", "sidebar.shareTargetMissing"],
   ["missing_base_revision", "collab.errorMissingBaseRevision"],
   ["invalid_base_revision", "collab.errorInvalidBaseRevision"],
   ["missing_operation_id", "collab.errorMissingOperationID"],

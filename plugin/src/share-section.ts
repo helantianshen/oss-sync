@@ -1,5 +1,5 @@
 // 分享区：渲染当前仓库的公开文章、浏览量与管理操作
-import { Notice } from "obsidian";
+import { Notice, SuggestModal, TFile } from "obsidian";
 import type { ShareOut } from "./api";
 import type OSSPlugin from "./main";
 
@@ -43,10 +43,52 @@ export function renderShareRows(
       cls: "oss-sidebar-share-toggle",
       text: plugin.t(share.allow_copy ? "sidebar.blockCopy" : "sidebar.allowCopy"),
     }).addEventListener("click", () => void updateAllowCopy(plugin, share, onChanged));
+    if (!share.is_folder && share.vault_id === plugin.settings.vaultId) {
+      actions.createEl("button", {
+        text: plugin.t("sidebar.rebindShare"),
+      }).addEventListener("click", () => new ShareTargetPicker(plugin, share, onChanged).open());
+    }
     actions.createEl("button", {
       cls: "oss-sidebar-share-delete mod-warning",
       text: plugin.t("sidebar.deleteShare"),
     }).addEventListener("click", () => void deleteShare(plugin, share.share_id, onChanged));
+  }
+}
+
+class ShareTargetPicker extends SuggestModal<TFile> {
+  constructor(
+    private readonly plugin: OSSPlugin,
+    private readonly share: ShareOut,
+    private readonly onChanged?: () => void | Promise<void>,
+  ) {
+    super(plugin.app);
+    this.setPlaceholder(plugin.t("sidebar.rebindSharePrompt"));
+  }
+
+  getSuggestions(query: string): TFile[] {
+    const search = query.trim().toLowerCase();
+    return this.app.vault.getMarkdownFiles()
+      .filter((file) => file.path !== this.share.target_path && file.path.toLowerCase().includes(search))
+      .slice(0, 50);
+  }
+
+  renderSuggestion(file: TFile, el: HTMLElement): void {
+    el.setText(file.path);
+  }
+
+  onChooseSuggestion(file: TFile): void {
+    void this.rebind(file);
+  }
+
+  private async rebind(file: TFile): Promise<void> {
+    if (this.share.vault_id !== this.plugin.settings.vaultId) return;
+    try {
+      await this.plugin.api.updateShareTarget(this.share.share_id, file.path);
+      new Notice(this.plugin.t("sidebar.shareRebound"));
+      await this.onChanged?.();
+    } catch (error) {
+      new Notice(this.plugin.t("sidebar.shareActionFailed", { error: this.plugin.localizedError(error) }));
+    }
   }
 }
 

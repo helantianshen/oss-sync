@@ -17,6 +17,7 @@ import {
 import type { Command, Editor, MarkdownView } from "obsidian";
 import { OSSApiClient, VaultOut } from "./api";
 import type {
+  OSSApiError,
   ShareOut,
   ServerVersionInfo,
   ServerUpdateCheckResponse,
@@ -103,6 +104,7 @@ export default class OSSPlugin extends Plugin {
   private loaded = false;
   private pluginVersionCheckTimer: number | null = null;
   private pluginVersionCheckInProgress = false;
+  private sessionCheckInProgress = false;
   /** 同一路径冲突编辑告警的上次提示时间，用于 3 秒去重 */
   private readonly conflictWarningLast = new Map<string, number>();
   private readonly conflictOpenings = new ConflictOpeningGuard();
@@ -116,7 +118,12 @@ export default class OSSPlugin extends Plugin {
    */
   constructor(app: App, manifest: PluginManifest) {
     super(app, manifest);
-    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired(), this.app.vault.configDir);
+    this.api = this.createAPI();
+  }
+
+  private createAPI(): OSSApiClient {
+    return new OSSApiClient(this.settings, this.diagnostics, (error) => this.handleSessionRejected(error),
+      this.app.vault.configDir, () => this.sidebarView?.refresh());
   }
 
   /** 插件加载：恢复设置与凭据，装配各子系统，注册事件、命令与设置页，并在布局就绪后触发首轮同步 */
@@ -131,12 +138,11 @@ export default class OSSPlugin extends Plugin {
     await this.loadSettings();
     this.emitRuntimeInfo();
 
-    this.api = new OSSApiClient(this.settings, this.diagnostics, () => this.handleTokenExpired(), this.app.vault.configDir);
+    this.api = this.createAPI();
     if (this.token) this.api.setToken(this.token);
 
     this.baseline = new BaselineStore(this.app.vault);
     this.syncEngine = new SyncEngine(this.app, this.api, this.baseline, this, this.diagnostics);
-    this.syncEngine.start();
 
     this.collabManager = new CollabManager(
       this.app,
@@ -273,48 +279,34 @@ export default class OSSPlugin extends Plugin {
       this.pluginVersionCheckTimer = window.setInterval(
         () => void this.autoCheckPluginVersion(), PLUGIN_VERSION_CHECK_INTERVAL_MS,
       );
-      if (!this.token) return;
-      void (async () => {
-        await Promise.resolve();
-        if (!this.loaded) return;
-        await this.registerServerPluginCommands();
-        if (this.settings.vaultId) {
-          this.collabManager.start();
-        }
-        try {
-          await this.ensureVaultBinding();
-        } catch (error: unknown) {
-          if (this.isDeviceIdentityError(error)) {
-            await this.handleDeviceIdentityRequired();
-            return;
-          }
-          throw error;
-        }
-        if (!this.loaded) return;
-        if (this.settings.vaultId) {
-          void this.syncEngine.runOnce({ forceFull: true }).catch((error: unknown) => {
-            if (this.isDeviceIdentityError(error)) {
-              void this.handleDeviceIdentityRequired();
-              return;
-            }
-            new Notice(this.t("sync.error", { error: this.localizedError(error) }));
-          });
-        }
-        // 管理员自动检查更新，有新版本时用 Notice 提示
-        if (this.isAdmin()) {
-          void this.autoCheckServerUpdates();
-        }
-      })().catch((error: unknown) => {
-        if (this.isDeviceIdentityError(error)) {
-          void this.handleDeviceIdentityRequired();
-          return;
-        }
-        // 启动期失败与后续轮询失败同源，冷期内只提示一次
-        if (this.syncErrorNotices.shouldShow("plugin.vaults")) {
-          new Notice(this.t("notice.loadVaultsFailed", { error: this.localizedError(error) }));
-        }
-      });
+      void this.resumeSavedSession();
+      this.registerInterval(window.setInterval(() => {
+        if (this.api.getSessionStatus() !== "approved" || !this.settings.vaultId) void this.resumeSavedSession();
+      }, 30_000));
     });
+  }
+
+  private async resumeSavedSession(): Promise<void> {
+    const token = this.token;
+    if (!this.loaded || !token || this.sessionCheckInProgress) return;
+    this.sessionCheckInProgress = true;
+    try {
+      await this.ensureVaultBinding();
+      if (!this.loaded || this.token !== token) return;
+      if (!this.settings.vaultId) return;
+      this.syncEngine.start();
+      this.collabManager.start();
+      void this.syncEngine.runOnce({ forceFull: true });
+      void this.registerServerPluginCommands();
+      if (this.isAdmin()) void this.autoCheckServerUpdates();
+    } catch (error: unknown) {
+      if (this.api.getSessionStatus() === "checking" && this.syncErrorNotices.shouldShow("plugin.vaults")) {
+        new Notice(this.t("notice.loadVaultsFailed", { error: this.localizedError(error) }));
+      }
+    } finally {
+      this.sessionCheckInProgress = false;
+      this.sidebarView?.refresh();
+    }
   }
 
   private async syncAfterEditorLeave(file: TFile, markdown: MarkdownView): Promise<void> {
@@ -605,6 +597,7 @@ export default class OSSPlugin extends Plugin {
       this.settings.vaultId = "";
       this.settings.vaultName = "";
       await this.saveSettings();
+      this.syncEngine.stop();
       this.collabManager.stop();
       return result;
     }
@@ -620,11 +613,12 @@ export default class OSSPlugin extends Plugin {
         message: error instanceof Error ? `ensureVaultBinding: ${error.message}` : String(error),
       });
     }
-    this.syncEngine.start();
-    if (this.settings.vaultId) {
+    if (this.api.getSessionStatus() === "approved" && this.settings.vaultId) {
+      this.syncEngine.start();
       this.collabManager.start();
       void this.syncEngine.runOnce({ forceFull: false });
     }
+    this.sidebarView?.refresh();
     return result;
   }
 
@@ -681,32 +675,8 @@ export default class OSSPlugin extends Plugin {
     this.serverUpdatePoller = null;
   }
 
-  /** 判断是否为设备身份类错误，此类错误要求重新登录而非重试 */
-  private isDeviceIdentityError(error: unknown): boolean {
-    const code =
-      typeof error === "object" && error !== null && "code" in error && typeof (error as { code?: unknown }).code === "string"
-        ? (error as { code: string }).code
-        : "";
-    return code === "device_identity_required" || code === "device_identity_mismatch";
-  }
-
-  /** 设备身份失效：清空令牌与绑定并停止后台任务，提示重新登录 */
-  private async handleDeviceIdentityRequired(): Promise<void> {
-    this.token = undefined;
-    this.api.setToken(null);
-    this.availableVaults = [];
-    this.settings.vaultId = "";
-    this.settings.vaultName = "";
-    this.syncEngine.stop();
-    this.collabManager.stop();
-    if (requireApiVersion("1.13.0")) this.ossSettingTab?.update();
-    await this.saveSettings();
-    this.setSyncState("idle");
-    new Notice(this.t("notice.reloginRequired"));
-  }
-
-  /** 令牌过期：清空令牌与绑定并停止后台任务，由 API 客户端的回调触发 */
-  private async handleTokenExpired(): Promise<void> {
+  /** 服务端拒绝当前凭据时停止后台任务，等重新登录后校验仓库绑定。 */
+  private async handleSessionRejected(error: OSSApiError): Promise<void> {
     this.token = undefined;
     this.api.setToken(null);
     this.availableVaults = [];
@@ -715,7 +685,7 @@ export default class OSSPlugin extends Plugin {
     if (requireApiVersion("1.13.0")) this.ossSettingTab?.update();
     await this.saveSettings();
     this.setSyncState("idle");
-    new Notice(this.t("auth.tokenExpired"));
+    new Notice(this.t(error.code === "token_expired" ? "auth.tokenExpired" : "auth.sessionRejected"));
   }
 
   /** 启动与定时检查共用入口，请求进行中或插件卸载后跳过 */
@@ -837,14 +807,18 @@ export default class OSSPlugin extends Plugin {
       this.availableVaults = [];
       return [];
     }
+    const token = this.token;
     const result = await this.api.listVaults();
+    if (this.token !== token) return this.availableVaults;
     this.availableVaults = result.vaults;
     return this.availableVaults;
   }
 
   /** 校验并修正仓库绑定：绑定失效或无可用仓库时解绑，未绑定则落到默认仓库 */
   async ensureVaultBinding(): Promise<void> {
+    const token = this.token;
     const vaults = await this.refreshVaults();
+    if (this.token !== token) return;
     if (vaults.length === 0) {
       if (this.settings.vaultId || this.settings.vaultName) {
         this.settings.vaultId = "";

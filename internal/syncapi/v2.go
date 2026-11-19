@@ -946,6 +946,11 @@ func (h *Handler) V2Rename(c *gin.Context) {
 		} else if err := tx.Create(&target).Error; err != nil {
 			return err
 		}
+		if err := tx.Model(&models.Share{}).
+			Where("user_id = ? AND vault_id = ? AND target_path = ? AND is_folder = ?", vault.OwnerID, vault.ID, req.OldPath, false).
+			Update("target_path", req.NewPath).Error; err != nil {
+			return err
+		}
 		oldResult = oldFile
 		newResult = target
 		// 记录重命名历史，快照旧路径正文

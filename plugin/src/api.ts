@@ -347,22 +347,38 @@ export interface ServerUpdateTriggerResponse {
 }
 
 /** 服务端 HTTP 客户端；令牌由插件持久化后注入，请求失败统一抛 OSSApiError */
+export type SessionStatus = "signedOut" | "checking" | "pending" | "approved";
+
 export class OSSApiClient {
   /** 服务端时间与本地时间的偏移，单位为毫秒*/
   private timeOffset = 0;
   private token: string | null = null;
+  private sessionStatus: SessionStatus = "signedOut";
   private markdownDeltaSource = "";
 
   constructor(
     private settings: OSSSettings,
     private readonly diagnostics?: Diagnostics,
-    private readonly onTokenExpired?: () => Promise<void>,
-    private readonly configDir = ""
+    private readonly onSessionRejected?: (error: OSSApiError) => Promise<void>,
+    private readonly configDir = "",
+    private readonly onSessionStatusChanged?: () => void,
   ) {}
 
   /** 设置或清除当前令牌 */
   setToken(token: string | null): void {
+    if (this.token === token) return;
     this.token = token;
+    this.setSessionStatus(token ? "checking" : "signedOut");
+  }
+
+  getSessionStatus(): SessionStatus {
+    return this.sessionStatus;
+  }
+
+  private setSessionStatus(status: SessionStatus): void {
+    if (this.sessionStatus === status) return;
+    this.sessionStatus = status;
+    this.onSessionStatusChanged?.();
   }
 
   /** 是否持有令牌 */
@@ -446,13 +462,17 @@ export class OSSApiClient {
       username: this.settings.username,
       password: this.settings.password,
     });
-    this.token = res.token;
+    this.setToken(res.token);
+    if (res.device_status === "pending") this.setSessionStatus("pending");
     return res;
   }
 
   /** 列出当前用户可见的仓库 */
   async listVaults(): Promise<{ vaults: VaultOut[] }> {
-    return this.doRequest<{ vaults: VaultOut[] }>("GET", "/api/vaults");
+    const token = this.token;
+    const result = await this.doRequest<{ vaults: VaultOut[] }>("GET", "/api/vaults");
+    if (token && this.token === token) this.setSessionStatus("approved");
+    return result;
   }
 
   /** 创建仓库 */
@@ -540,13 +560,15 @@ export class OSSApiClient {
       client_id: this.settings.clientId,
       operation_id: input.operationID,
     });
+    const requestToken = this.token;
+    const headers = this.authHeaders(requestToken);
     try {
       const send = async (content: ArrayBuffer, type: string): Promise<HttpResponse> => {
         bytes += content.byteLength;
         const response = await httpRequest({
           url: `${endpoint}/upload?${query.toString()}`,
           method: "POST",
-          headers: { "Content-Type": type, ...this.authHeaders() },
+          headers: { "Content-Type": type, ...headers },
           body: content,
         });
         status = response.status;
@@ -557,10 +579,10 @@ export class OSSApiClient {
         const signature = await httpRequest({
           url: `${endpoint}/delta-base?${baseQuery.toString()}`,
           method: "GET",
-          headers: this.authHeaders(),
+          headers,
         });
         if (signature.status >= 400 && ![404, 405, 409, 415].includes(signature.status)) {
-          await this.parseResponse<never>(signature.status, signature.json, signature.text);
+          await this.parseResponse<never>(signature.status, signature.json, signature.text, requestToken);
         }
         if (signature.status === 200 && header(signature.headers, "content-type") === DELTA_SIGNATURE_TYPE) {
           signatureBytes = signature.arrayBuffer.byteLength;
@@ -573,7 +595,7 @@ export class OSSApiClient {
             query.set("base_hash", input.deltaBaseHash);
             const result = await send(patch, DELTA_CONTENT_TYPE);
             if (result.status !== 415 && !(result.status === 422 && isErrorBody(result.json) && result.json.code === "delta_invalid")) {
-              const meta = await this.parseResponse<SyncFileMeta>(result.status, result.json, result.text);
+              const meta = await this.parseResponse<SyncFileMeta>(result.status, result.json, result.text, requestToken);
               const receipt = Object.assign(meta, { usedDelta: true as const });
               mode = "delta";
               return receipt;
@@ -583,7 +605,7 @@ export class OSSApiClient {
         }
       }
       const res = await send(input.content, "application/octet-stream");
-      const meta = await this.parseResponse<SyncFileMeta>(res.status, res.json, res.text);
+      const meta = await this.parseResponse<SyncFileMeta>(res.status, res.json, res.text, requestToken);
       if (meta) mode = "full";
       return meta;
     } finally {
@@ -619,6 +641,8 @@ export class OSSApiClient {
     let patchBytes: number | undefined;
     const query = new URLSearchParams({ path, revision: String(revision) });
     const endpoint = this.url(`/api/vaults/${encodeURIComponent(vaultID)}/sync`);
+    const requestToken = this.token;
+    const headers = this.authHeaders(requestToken);
     this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "started", details: { path, revision } });
     try {
       const requestDownload = async (signature?: ArrayBuffer, attempt = 0): Promise<HttpResponse> => {
@@ -627,12 +651,12 @@ export class OSSApiClient {
           const response = await httpRequest({
             url: `${endpoint}/${signature ? "download-delta" : "download"}?${query.toString()}`,
             method: signature ? "POST" : "GET",
-            headers: signature ? { "Content-Type": DELTA_SIGNATURE_TYPE, ...this.authHeaders() } : this.authHeaders(),
+            headers: signature ? { "Content-Type": DELTA_SIGNATURE_TYPE, ...headers } : headers,
             body: signature,
           });
           status = response.status;
           if (response.status >= 400 && !(signature && [404, 405, 415].includes(response.status))) {
-            await this.parseResponse<never>(response.status, response.json, response.text);
+            await this.parseResponse<never>(response.status, response.json, response.text, requestToken);
           }
           return response;
         } catch (error) {
@@ -1040,17 +1064,18 @@ export class OSSApiClient {
     const startedAt = Date.now();
     let status: number | undefined;
     let bytes: number | undefined;
+    const requestToken = this.token;
     try {
       const res = await httpRequest({
         url: this.url(
           `/api/vaults/${encodeURIComponent(vaultID)}/collaborations/files/${encodeURIComponent(String(fileID))}/content`
         ),
         method: "GET",
-        headers: this.authHeaders(),
+        headers: this.authHeaders(requestToken),
       });
       status = res.status;
       if (res.status >= 400) {
-        await this.parseResponse<never>(res.status, res.json, res.text);
+        await this.parseResponse<never>(res.status, res.json, res.text, requestToken);
       }
       bytes = res.arrayBuffer.byteLength;
       return {
@@ -1165,6 +1190,10 @@ export class OSSApiClient {
     });
   }
 
+  async updateShareTarget(shareID: string, targetPath: string): Promise<ShareOut> {
+    return this.doRequest<ShareOut>("PATCH", `/api/shares/${encodeURIComponent(shareID)}`, { target_path: targetPath });
+  }
+
   /** 删除分享 */
   async deleteShare(shareID: string): Promise<void> {
     await this.doRequest<void>("DELETE", `/api/shares/${encodeURIComponent(shareID)}`);
@@ -1176,12 +1205,12 @@ export class OSSApiClient {
   }
 
   /** 构造请求头；设备名需编码以兼容非 ASCII 字符 */
-  private authHeaders(): Record<string, string> {
+  private authHeaders(token = this.token): Record<string, string> {
     const headers: Record<string, string> = {
       "X-OSS-Client-ID": this.settings.clientId,
       "X-OSS-Device-Name": encodeURIComponent(this.settings.deviceName),
     };
-    if (this.token) headers.Authorization = "Bearer " + this.token;
+    if (token) headers.Authorization = "Bearer " + token;
     return headers;
   }
 
@@ -1193,18 +1222,19 @@ export class OSSApiClient {
   ): Promise<T> {
     const startedAt = Date.now();
     let status: number | undefined;
+    const requestToken = path === "/api/auth/login" ? null : this.token;
     try {
       const res = await httpRequest({
         url: this.url(path),
         method,
         headers: {
           "Content-Type": "application/json",
-          ...this.authHeaders(),
+          ...this.authHeaders(requestToken),
         },
         body: body ? JSON.stringify(body) : undefined,
       });
       status = res.status;
-      return this.parseResponse<T>(res.status, res.json, res.text);
+      return this.parseResponse<T>(res.status, res.json, res.text, requestToken);
     } catch (error) {
       if (error instanceof OSSApiError) status = error.status;
       this.diagnostics?.record({
@@ -1231,7 +1261,7 @@ export class OSSApiClient {
   }
 
   /** 解析响应；4xx/5xx 时构造 OSSApiError 并透出服务端字段 */
-  private async parseResponse<T>(status: number, json: unknown, text: string): Promise<T> {
+  private async parseResponse<T>(status: number, json: unknown, text: string, requestToken: string | null): Promise<T> {
     if (status >= 400) {
       // 服务端故障时可能返回 HTML 错误页，不能把 JSON 解析异常直接抛给用户
       let body: unknown = json;
@@ -1251,13 +1281,15 @@ export class OSSApiClient {
         errorBodyNumber(body, "compacted_revision"),
         errorBodyNumber(body, "head_revision")
       );
-      if (
-        status === 401 &&
-        this.token &&
-        (error.code === "token_expired" || error.message.toLowerCase().includes("jwt token expired"))
-      ) {
-        this.token = null;
-        await this.onTokenExpired?.();
+      if (requestToken && this.token === requestToken) {
+        if (error.code === "device_pending") {
+          this.setSessionStatus("pending");
+        } else if (error.code === "device_not_authorized") {
+          this.setSessionStatus("checking");
+        } else if (status === 401 || error.code === "device_unknown" || error.code === "device_revoked") {
+          this.setToken(null);
+          await this.onSessionRejected?.(error);
+        }
       }
       throw error;
     }

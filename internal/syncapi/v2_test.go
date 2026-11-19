@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+
+	"github.com/helantianshen/oss-sync/internal/models"
 )
 
 func TestV2UploadCompareAndSwapPreservesContent(t *testing.T) {
@@ -82,6 +84,11 @@ func TestV2RenamePublishesTombstoneAndResumableChanges(t *testing.T) {
 	f := newSyncFixture(t)
 	const content = "# Rename me\n"
 	first := f.upload("old.md", content, 0, "create")
+	share := models.Share{
+		ShareID: "same-link", UserID: f.user.ID, VaultID: f.vault.ID, TargetPath: first.Path,
+		Views: 12, AllowCopy: true, Visibility: "password", SharePassword: "preserved-access-hash",
+	}
+	f.create(&share)
 	response := f.postJSON(f.endpoint("rename"), v2RenameRequest{
 		OldPath: first.Path, NewPath: "folder/new.md", BaseRevision: first.Revision,
 		TargetRevision: 0, OperationID: "rename", ClientMTime: 1700000000456,
@@ -94,6 +101,14 @@ func TestV2RenamePublishesTombstoneAndResumableChanges(t *testing.T) {
 		t.Fatalf("new-path metadata = %+v, old %+v", renamed.New, renamed.Old)
 	}
 	f.assertDownload(renamed.New, content)
+	var movedShare models.Share
+	if err := f.db.First(&movedShare, "share_id = ?", share.ShareID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if movedShare.TargetPath != renamed.New.Path || movedShare.Views != share.Views || movedShare.AllowCopy != share.AllowCopy ||
+		movedShare.Visibility != share.Visibility || movedShare.SharePassword != share.SharePassword {
+		t.Fatalf("rename did not preserve the share: %+v", movedShare)
+	}
 	gone := f.request(http.MethodGet, f.endpoint("download")+"?path="+url.QueryEscape(first.Path), f.token, "", nil)
 	old := decodeResponse[struct {
 		Current V2FileMeta `json:"current"`

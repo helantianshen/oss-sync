@@ -15,6 +15,7 @@ import (
 	"github.com/helantianshen/oss-sync/internal/auth"
 	"github.com/helantianshen/oss-sync/internal/config"
 	"github.com/helantianshen/oss-sync/internal/models"
+	"github.com/helantianshen/oss-sync/internal/synclock"
 	"github.com/helantianshen/oss-sync/internal/vaultaccess"
 )
 
@@ -49,7 +50,8 @@ type createRequest struct {
 }
 
 type updateRequest struct {
-	AllowCopy *bool `json:"allow_copy"`
+	AllowCopy  *bool   `json:"allow_copy"`
+	TargetPath *string `json:"target_path"`
 	// Visibility 与 SharePassword 可单独或一起更新；password 模式必须提供新密码
 	Visibility    string `json:"visibility"`
 	SharePassword string `json:"share_password"`
@@ -196,13 +198,19 @@ func (h *Handler) createOne(
 	access ShareAccess,
 ) (shareOut, error) {
 	if !isFolder {
+		lock := synclock.Vault(vaultID)
+		lock.Lock()
+		defer lock.Unlock()
 		var cnt int64
-		h.DB.Model(&models.File{}).
+		err := h.DB.Model(&models.File{}).
 			Where(
 				"user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ?",
 				userID, vaultID, targetPath, false,
 			).
-			Count(&cnt)
+			Count(&cnt).Error
+		if err != nil {
+			return shareOut{}, err
+		}
 		if cnt == 0 {
 			return shareOut{}, fmt.Errorf("file not found: %s", targetPath)
 		}
@@ -324,8 +332,8 @@ func (h *Handler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "code": "invalid_share_update"})
 		return
 	}
-	if req.AllowCopy == nil && req.Visibility == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "allow_copy or visibility is required", "code": "invalid_share_update"})
+	if req.AllowCopy == nil && req.Visibility == "" && req.TargetPath == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no share fields to update", "code": "invalid_share_update"})
 		return
 	}
 	var share models.Share
@@ -339,6 +347,28 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 	updates := map[string]any{}
+	if req.TargetPath != nil {
+		path := *req.TargetPath
+		if share.IsFolder || path == "" || !isSafeSharePath(path) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid share target", "code": "invalid_share_target"})
+			return
+		}
+		lock := synclock.Vault(share.VaultID)
+		lock.Lock()
+		defer lock.Unlock()
+		var file models.File
+		err := h.DB.Select("id").Where("user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ?", share.UserID, share.VaultID, path, false).Take(&file).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "share target has not been synced", "code": "share_target_missing"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not verify share target", "code": "share_update_failed"})
+			return
+		}
+		share.TargetPath = path
+		updates["target_path"] = path
+	}
 	if req.AllowCopy != nil {
 		share.AllowCopy = *req.AllowCopy
 		updates["allow_copy"] = share.AllowCopy
@@ -357,8 +387,13 @@ func (h *Handler) Update(c *gin.Context) {
 		updates["visibility"] = visibility
 		updates["share_password"] = passwordHash
 	}
-	if err := h.DB.Model(&share).Updates(updates).Error; err != nil {
+	result := h.DB.Model(&share).Updates(updates)
+	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update share failed", "code": "share_update_failed"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "share not found", "code": "share_not_found"})
 		return
 	}
 	c.JSON(http.StatusOK, toOut(share))

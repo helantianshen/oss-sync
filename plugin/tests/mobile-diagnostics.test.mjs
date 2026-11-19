@@ -20,7 +20,7 @@ async function load(t) {
         export const host={request:null}; export const Platform={isDesktop:false,isMobile:true};
         export function requestUrl(input){return host.request(input);}
         export class Notice{constructor(message){host.notices??=[];host.notices.push(message);}} export class App{} export class TAbstractFile{} export class TFile{} export class TFolder{} export class Vault{}
-        export class Modal{} export class Setting{} export class ButtonComponent{} export class ItemView{} export class MarkdownView{} export class Plugin{} export class PluginSettingTab{}
+        export class Modal{} export class SuggestModal extends Modal{} export class Setting{} export class ButtonComponent{} export class ItemView{} export class MarkdownView{} export class Plugin{} export class PluginSettingTab{}
         export const normalizePath=p=>p; export function setIcon(){} export function setTooltip(){} export const apiVersion="1.14.5";
         export function requireApiVersion(){return true;}
         export const editorInfoField = undefined;
@@ -350,9 +350,10 @@ test("a mobile download reaches local write and baseline acknowledgement after t
   const m = await load(t);
   const diagnostics = new m.Diagnostics();
   const bytes = new TextEncoder().encode("# route guide\n中文测试\n");
-  m.host.request = async () => ({ status: 200, text: new TextDecoder().decode(bytes), arrayBuffer: bytes.buffer, headers: { "x-oss-revision": "17", "x-oss-hash": "hash" }, get json() { throw new SyntaxError("not JSON"); } });
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  m.host.request = async () => ({ status: 200, text: new TextDecoder().decode(bytes), arrayBuffer: bytes.buffer, headers: { "x-oss-revision": "17", "x-oss-hash": hash }, get json() { throw new SyntaxError("not JSON"); } });
   const writes = [], acknowledgements = [], removed = [];
-  const remote = { path: "notes/mobile.md", size: bytes.length, revision: 17 };
+  const remote = { path: "notes/mobile.md", size: bytes.length, hash, revision: 17 };
   const engine = {
     diagnostics, api: new m.OSSApiClient({ serverUrl: "https://example.invalid" }, diagnostics),
     ordinaryFileAccess: { create: async (path, expected, received) => { writes.push({ path, expected, bytes: received }); return { kind: "written", snapshot: { hash: "hash" } }; } },
@@ -366,6 +367,78 @@ test("a mobile download reaches local write and baseline acknowledgement after t
   assert.deepEqual(removed, [remote.path]);
   assert.ok(diagnostics.snapshot().some((event) => event.stage === "written"));
   assert.equal(diagnostics.failureSnapshot().length, 0);
+});
+
+test("a newer remote revision during download is retried once without creating a local conflict", async (t) => {
+  const m = await load(t);
+  const remote = { path: "notes/mobile.md", type: "markdown", mtime: 200, size: 400, hash: "server", revision: 17, deleted: false };
+  const latest = { ...remote, revision: 18, hash: "newer" };
+  const revisions = [];
+  const engine = {
+    api: { downloadV2: async (vaultId, path, revision) => {
+      revisions.push(revision);
+      throw new m.OSSApiError("revision changed", 409, { ...latest, revision: revision + 1 });
+    } },
+    conflictOutcome: () => assert.fail("a remote revision race must not create a manual conflict"),
+    applyDownload: m.SyncEngine.prototype.applyDownload,
+    ordinaryFileAccess: {},
+  };
+  const result = await engine.applyDownload("vault", remote, { kind: "hash", hash: "base" });
+  assert.equal(result.kind, "deferred_retry");
+  assert.deepEqual(revisions, [17, 18]);
+  assert.equal(result.cause.current.revision, 19);
+});
+
+test("long polling starts snapshot recovery when the server has compacted the saved cursor", async (t) => {
+  const m = await load(t);
+  const controller = new AbortController();
+  const stale = new m.OSSApiError("history compacted", 410, undefined, "history_compacted");
+  const engine = {
+    stopped: false, longPollGen: 1,
+    strategy: { getLongPollWaitSec: () => 20 },
+    plugin: { settings: { vaultId: "vault" } },
+    baseline: { getCursor: () => 4 },
+    api: {
+      hasToken: () => true,
+      changes: async (vaultId, cursor) => {
+        assert.equal(vaultId, "vault");
+        assert.equal(cursor, 4);
+        throw stale;
+      },
+    },
+    runOnce: async (options) => {
+      assert.deepEqual(options, { forceFull: true });
+      controller.abort();
+      return true;
+    },
+  };
+  await m.SyncEngine.prototype.longPollLoop.call(engine, 1, controller);
+  assert.equal(controller.signal.aborted, true);
+});
+
+test("saved credentials are verified, waiting approval is distinguished, and rejected credentials are cleared", async (t) => {
+  const m = await load(t);
+  const rejected = [];
+  const api = new m.OSSApiClient({ serverUrl: "https://example.invalid", deviceName: "Laptop" }, undefined, async (error) => rejected.push(error));
+  function reply(status, body) {
+    const text = JSON.stringify(body);
+    m.host.request = async () => ({ status, text, arrayBuffer: new TextEncoder().encode(text).buffer, headers: {} });
+  }
+  assert.equal(api.getSessionStatus(), "signedOut");
+  api.setToken("saved-token");
+  assert.equal(api.getSessionStatus(), "checking");
+  reply(403, { error: "Device approval required", code: "device_pending" });
+  await assert.rejects(api.listVaults());
+  assert.equal(api.getSessionStatus(), "pending");
+  assert.equal(api.hasToken(), true);
+  reply(200, { vaults: [] });
+  await api.listVaults();
+  assert.equal(api.getSessionStatus(), "approved");
+  reply(401, { error: "unauthorized: invalid signature" });
+  await assert.rejects(api.listVaults());
+  assert.equal(api.getSessionStatus(), "signedOut");
+  assert.equal(api.hasToken(), false);
+  assert.equal(rejected.length, 1);
 });
 
 test("only explicit SQLite busy failures get two bounded retries for the same download", async (t) => {
@@ -405,8 +478,9 @@ test("a local write failure is distinguished from download failure and is still 
   const m = await load(t);
   const diagnostics = new m.Diagnostics();
   const error = new Error("EACCES permission denied");
-  const remote = { path: "notes/手机.md", size: 64, revision: 5 };
-  const engine = { diagnostics, isSyncPath: () => true, api: { downloadV2: async () => ({ content: new ArrayBuffer(64), meta: remote }) }, ordinaryFileAccess: { create: async () => { throw error; } } };
+  const content = new ArrayBuffer(64);
+  const remote = { path: "notes/手机.md", size: 64, revision: 5, hash: createHash("sha256").update(new Uint8Array(content)).digest("hex") };
+  const engine = { diagnostics, isSyncPath: () => true, api: { downloadV2: async () => ({ content, meta: remote }) }, ordinaryFileAccess: { create: async () => { throw error; } } };
   engine.applyDownload = (...args) => m.SyncEngine.prototype.applyDownload.apply(engine, args);
   engine.handleActionFailure = (...args) => m.SyncEngine.prototype.handleActionFailure.apply(engine, args);
   const action = { kind: "download", path: remote.path, remote, expectedLocal: { kind: "absent" } };

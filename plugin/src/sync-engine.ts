@@ -50,6 +50,10 @@ type RemoteSnapshot = {
   readonly recoverySnapshot: boolean;
 };
 
+function isCompactedHistory(error: unknown): boolean {
+  return error instanceof OSSApiError && error.status === 410 && error.code === "history_compacted";
+}
+
 /** 传输成功后生成基线条目的输入，bytesHash 为实际写入本地的内容哈希 */
 type LiveAcknowledgement = {
   readonly path: string;
@@ -221,6 +225,7 @@ export class SyncEngine {
         if (changed) await this.runOnce({ forceFull: false });
       } catch (error: unknown) {
         if (this.stopped || controller.signal.aborted || generation !== this.longPollGen) return;
+        if (isCompactedHistory(error) && await this.runOnce({ forceFull: true })) continue;
         this.diagnostics?.record({
           kind: "poll",
           at: Date.now(),
@@ -631,7 +636,7 @@ export class SyncEngine {
       try {
         page = useManifest ? await this.api.manifest(vaultID, cursor) : await this.api.changes(vaultID, cursor);
       } catch (error: unknown) {
-        if (!useManifest && error instanceof OSSApiError && error.status === 410 && error.code === "history_compacted") {
+        if (!useManifest && isCompactedHistory(error)) {
           files.clear();
           cursor = 0;
           useManifest = true;
@@ -760,10 +765,23 @@ export class SyncEngine {
     const baseline = this.baselineSnapshot();
     const vaultPaths = this.vaultPaths(forceFull);
     const candidates = ordinarySyncCandidatePaths({ forceFull, remote, baseline, pending, conflicts: new Set(), vaultPaths });
-    const conflicts = new Set(candidates.filter((path) => this.baseline.getConflict(path) !== null));
+    const conflicts = new Set<string>();
     const localByPath = new Map<string, OrdinarySyncLocalMeta | null>();
-    for (const path of ordinarySyncCandidatePaths({ forceFull, remote, baseline, pending, conflicts, vaultPaths })) {
+    for (const path of candidates) {
+      const conflict = this.baseline.getConflict(path);
+      if (conflict && (!forceFull && !remote.has(path) || conflict.remoteType !== "markdown" ||
+          conflict.localHash !== baseline.get(path)?.serverHash || !conflict.localHash)) {
+        conflicts.add(path);
+        continue;
+      }
       const local = await this.readLocalMeta(path);
+      if (conflict) {
+        if (local?.hash !== conflict.localHash) {
+          conflicts.add(path);
+          continue;
+        }
+        this.baseline.removeConflict(path);
+      }
       localByPath.set(path, local);
       // 路径重新纳入同步时，缺少本地副本应补下载，不能视为删除了服务器正文。
       if (!local && this.completedPathScope?.allows(path) === false &&
@@ -1096,7 +1114,7 @@ export class SyncEngine {
    * 下载远端版本写入本地；写入前按 expected 做本地状态校验
    * 校验失败（stale）说明写入期间本地已变更，转为冲突交给用户处理，不覆盖本地新内容
    */
-  private async applyDownload(vaultID: string, remote: SyncFileMeta, expected: ExpectedLocalState): Promise<OrdinarySyncActionOutcome> {
+  private async applyDownload(vaultID: string, remote: SyncFileMeta, expected: ExpectedLocalState, mayRetry = true): Promise<OrdinarySyncActionOutcome> {
     let downloaded;
     try {
       const delta = remote.type === "markdown" && expected.kind === "hash" ? {
@@ -1110,9 +1128,18 @@ export class SyncEngine {
       downloaded = await this.api.downloadV2(vaultID, remote.path, remote.revision, delta);
     } catch (error) {
       if (!isOrdinarySyncConflict409(error)) throw error;
-      return this.conflictOutcome(remote.path, await this.ordinaryFileAccess.readExact(remote.path), error.current);
+      const latest = error.current;
+      if (mayRetry && latest.path === remote.path && latest.revision > remote.revision) {
+        if (latest.deleted) return this.applyRemoteDelete(latest, expected);
+        return this.applyDownload(vaultID, latest, expected, false);
+      }
+      return { kind: "deferred_retry", reason: "second_conflict", cause: error };
     }
     const bytes = new Uint8Array(downloaded.content).slice();
+    const bytesHash = await sha256Hex(bytes);
+    if (downloaded.meta.revision !== remote.revision || bytesHash !== remote.hash) {
+      return { kind: "deferred_retry", reason: "transport" };
+    }
     this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "download", stage: "write_started", details: { path: remote.path, bytes: bytes.byteLength, expectedBytes: remote.size, revision: remote.revision, localState: expected.kind } });
     const write = expected.kind === "absent"
       ? await this.ordinaryFileAccess.create(remote.path, expected, bytes)
@@ -1127,7 +1154,7 @@ export class SyncEngine {
       server: downloaded.meta,
       local: snapshot,
       bytes,
-      bytesHash: await sha256Hex(bytes),
+      bytesHash,
     }));
     this.baseline.removePendingForPath(remote.path);
     return { kind: "resolved", transfer: downloaded.usedDelta ? "delta" : "full" };
