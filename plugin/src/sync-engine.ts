@@ -828,14 +828,17 @@ export class SyncEngine {
       .map((file) => normalizePath(file.path)), ...this.configurationFiles.keys()];
   }
 
-  private currentPathScope(): { key: string; allows: (path: string) => boolean } {
-    const { syncConfiguration, syncCommunityPlugins, syncExclusions, syncWhitelist } = this.plugin.settings;
+  private currentPathScope() {
+    const { syncConfiguration, syncCommunityPlugins, vaultId, syncExclusions, syncWhitelist } = this.plugin.settings;
+    const syncCommunityPluginSettings = this.plugin.settings.syncCommunityPluginSettings &&
+      this.strategy.supportsCommunityPluginSettings(vaultId);
     const configDir = this.vault.configDir;
     const ownPluginDir = normalizePath(this.plugin.manifest?.dir ?? "").replace(/\/+$/, "");
     if (this.pathScope?.configDir === configDir && this.pathScope.syncConfiguration === syncConfiguration &&
-        this.pathScope.syncCommunityPlugins === syncCommunityPlugins && this.pathScope.ownPluginDir === ownPluginDir &&
+        this.pathScope.syncCommunityPlugins === syncCommunityPlugins &&
+        this.pathScope.syncCommunityPluginSettings === syncCommunityPluginSettings && this.pathScope.ownPluginDir === ownPluginDir &&
         this.pathScope.syncExclusions === syncExclusions && this.pathScope.syncWhitelist === syncWhitelist) return this.pathScope;
-    const rules = { syncConfiguration, syncCommunityPlugins, ownPluginDir, syncExclusions, syncWhitelist };
+    const rules = { syncConfiguration, syncCommunityPlugins, syncCommunityPluginSettings, ownPluginDir, syncExclusions, syncWhitelist };
     this.pathScope = { ...rules, configDir, key: JSON.stringify([configDir, rules]), allows: buildSyncPathFilter(configDir, rules) };
     return this.pathScope;
   }
@@ -875,6 +878,7 @@ export class SyncEngine {
     if (!root || (await adapter.stat(root))?.type !== "folder") return files;
     const folders = [root];
     const plugins = `${root}/plugins`;
+    const { syncCommunityPlugins, syncCommunityPluginSettings } = this.currentPathScope();
     while (folders.length) {
       const folder = folders.pop()!;
       const entries = await adapter.list(folder);
@@ -885,7 +889,7 @@ export class SyncEngine {
       }
       for (const child of entries.folders.map(normalizePath)) {
         if (child === `${root}/snippets` || child === `${root}/themes` || folder === `${root}/themes` ||
-            this.plugin.settings.syncCommunityPlugins && (child === plugins || folder === plugins)) {
+            (syncCommunityPlugins || syncCommunityPluginSettings) && (child === plugins || folder === plugins)) {
           folders.push(child);
         }
       }
@@ -1483,7 +1487,11 @@ export class SyncEngine {
 
   /** 读取指定路径的冲突记录，供冲突窗口与侧边栏展示 */
   getConflict(path: string): ConflictEntry | null {
-    return this.baseline.getConflict(path);
+    return this.isSyncPath(path) ? this.baseline.getConflict(path) : null;
+  }
+
+  listConflicts(): ConflictEntry[] {
+    return this.baseline.conflicts().filter(({ path }) => this.isSyncPath(path));
   }
 
   /** 读取指定路径的基线条目，含合并所需的 baseText */

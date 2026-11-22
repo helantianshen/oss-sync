@@ -556,7 +556,7 @@ export default class OSSPlugin extends Plugin {
     const now = Date.now();
     const last = this.conflictWarningLast.get(key) ?? 0;
     if (now - last < 3000) return;
-    const hasOrdinary = !!this.baseline.getConflict(key);
+    const hasOrdinary = !!this.syncEngine.getConflict(key);
     const hasCollab = this.baseline.collaborationEntries().some((e) => normalizeRel(e.localPath) === key && !!e.conflict);
     if (!hasOrdinary && !hasCollab) return;
     this.conflictWarningLast.set(key, now);

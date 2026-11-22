@@ -18,21 +18,22 @@ const ABSOLUTE_BLACKLIST: BlacklistEntry[] = [
 const DEVICE_LOCAL_OBSIDIAN: BlacklistEntry[] = [
   { kind: "exact", value: "workspace.json" },
   { kind: "exact", value: "workspace-mobile.json" },
+  { kind: "exact", value: "community-plugins.json" },
   { kind: "exact", value: "cache" },
   { kind: "prefix", value: "cache/" },
   { kind: "exact", value: "plugins/oss-sync" },
   { kind: "prefix", value: "plugins/oss-sync/" },
-  { kind: "glob", value: "plugins/*/data.json" },
 ];
 
 const PORTABLE_CONFIGURATION = new Set([
   "app.json", "appearance.json", "bookmarks.json", "graph.json", "hotkeys.json",
-  "core-plugins.json", "community-plugins.json", "types.json",
+  "core-plugins.json", "types.json",
 ]);
 
 export interface SyncPathRules {
   readonly syncConfiguration: boolean;
   readonly syncCommunityPlugins?: boolean;
+  readonly syncCommunityPluginSettings?: boolean;
   readonly ownPluginDir?: string;
   readonly syncExclusions: string;
   readonly syncWhitelist: string;
@@ -54,6 +55,10 @@ function isCommunityPluginFile(path: string): boolean {
   return /^plugins\/[a-z0-9_-]+\/(?:manifest\.json|main\.js|styles\.css)$/i.test(path);
 }
 
+export function isCommunityPluginSettings(path: string): boolean {
+  return /^plugins\/[a-z0-9_-]+\/data\.json$/i.test(path);
+}
+
 /** 配置开关先约束可移植文件，白名单随后只覆盖用户自己的排除项。 */
 export function buildSyncPathFilter(configDir: string, rules: SyncPathRules): (path: string) => boolean {
   const excluded = compilePathRules(rules.syncExclusions);
@@ -67,7 +72,8 @@ export function buildSyncPathFilter(configDir: string, rules: SyncPathRules): (p
     const config = configurationRelativePath(normalized, configDir);
     if (config !== null) {
       if (!rules.syncConfiguration || !(isPortableConfiguration(config) ||
-          rules.syncCommunityPlugins && isCommunityPluginFile(config))) return false;
+          rules.syncCommunityPlugins && isCommunityPluginFile(config) ||
+          rules.syncCommunityPluginSettings && isCommunityPluginSettings(config))) return false;
     }
     return whitelisted.some((pattern) => pattern.test(normalized)) ||
       !excluded.some((pattern) => pattern.test(normalized));
@@ -90,9 +96,9 @@ function compilePathRules(value: string): RegExp[] {
     });
 }
 
-/** 黑名单条目：exact 为整路径，prefix 为目录前缀，glob 仅支持段内 * */
+/** 黑名单条目：exact 为整路径，prefix 为目录前缀 */
 interface BlacklistEntry {
-  kind: "exact" | "prefix" | "glob";
+  kind: "exact" | "prefix";
   value: string;
 }
 
@@ -125,18 +131,7 @@ function matches(entry: BlacklistEntry, path: string): boolean {
       return path === entry.value;
     case "prefix":
       return path === entry.value || path.startsWith(entry.value);
-    case "glob":
-      return globMatch(entry.value, path);
   }
-}
-
-// 这里只需要支持路径段内的 *
-function globMatch(pattern: string, path: string): boolean {
-  const regexStr = pattern
-    .split("/")
-    .map((seg) => seg.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"))
-    .join("/");
-  return new RegExp("^" + regexStr + "$").test(path);
 }
 
 /** 仅供测试访问黑名单表与匹配逻辑 */

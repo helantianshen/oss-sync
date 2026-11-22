@@ -4,6 +4,7 @@ import type { OSSApiClient, SyncMode, SyncStrategyResponse } from "./api";
 /** 缓存服务端仓库同步策略，未拉取到时各项取保守默认值 */
 export class SyncStrategyManager {
   private strategy: SyncStrategyResponse | null = null;
+  private vaultID = "";
 
   constructor(private readonly api: OSSApiClient) {}
 
@@ -22,9 +23,14 @@ export class SyncStrategyManager {
     return this.strategy?.long_poll_wait_sec ?? 30;
   }
 
+  supportsCommunityPluginSettings(vaultID: string): boolean {
+    return this.vaultID === vaultID && this.strategy?.community_plugin_settings === true;
+  }
+
   /** 拉取最新策略并缓存，失败由调用方决定如何处理*/
   async fetch(vaultID: string, userMode: SyncMode): Promise<SyncStrategyResponse> {
     this.strategy = await this.api.syncStrategy(vaultID, userMode);
+    this.vaultID = vaultID;
     return this.strategy;
   }
 }

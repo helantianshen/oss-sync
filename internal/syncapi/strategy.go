@@ -15,10 +15,11 @@ import (
 
 // strategyResponse 是 GET /api/vaults/:vault_id/sync/strategy 的响应
 type strategyResponse struct {
-	Policy          string `json:"policy"`
-	EffectiveMode   string `json:"effective_mode"`
-	MinDebounceSec  int    `json:"min_debounce_sec"`
-	LongPollWaitSec int    `json:"long_poll_wait_sec"`
+	Policy                  string `json:"policy"`
+	EffectiveMode           string `json:"effective_mode"`
+	MinDebounceSec          int    `json:"min_debounce_sec"`
+	LongPollWaitSec         int    `json:"long_poll_wait_sec"`
+	CommunityPluginSettings bool   `json:"community_plugin_settings"`
 }
 
 // V2Strategy 处理 GET /api/vaults/:vault_id/sync/strategy
@@ -74,9 +75,10 @@ func (h *Handler) V2Strategy(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, strategyResponse{
-		Policy:          string(policy),
-		EffectiveMode:   string(effective),
-		MinDebounceSec:  timing.SyncDebounceSec,
-		LongPollWaitSec: timing.LongPollWaitSec,
+		Policy:                  string(policy),
+		EffectiveMode:           string(effective),
+		MinDebounceSec:          timing.SyncDebounceSec,
+		LongPollWaitSec:         timing.LongPollWaitSec,
+		CommunityPluginSettings: true,
 	})
 }

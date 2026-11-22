@@ -9,6 +9,30 @@ import (
 	"github.com/helantianshen/oss-sync/internal/models"
 )
 
+func TestV2CommunityPluginSettingsTransfer(t *testing.T) {
+	f := newSyncFixture(t)
+	strategy := decodeResponse[strategyResponse](t, f.request(http.MethodGet, f.endpoint("strategy"),
+		f.token, "", nil), http.StatusOK)
+	if !strategy.CommunityPluginSettings {
+		t.Fatal("sync strategy must advertise community plugin settings support")
+	}
+	const content = `{"showLineNumbers":true}`
+	for _, path := range []string{".obsidian/plugins/example/data.json", ".custom/plugins/example/data.json"} {
+		response := f.request(http.MethodPost, uploadTarget(f.vault.ID, path, 0, "plugin-settings")+"&type=config",
+			f.token, "application/octet-stream", []byte(content))
+		file := decodeResponse[V2FileMeta](t, response, http.StatusOK)
+		if file.Type != "config" {
+			t.Fatalf("settings path %q stored as %q", path, file.Type)
+		}
+		f.assertDownload(file, content)
+	}
+	response := f.request(http.MethodPost, uploadTarget(f.vault.ID, ".obsidian/plugins/oss-sync/data.json", 0, "local-settings"),
+		f.token, "application/octet-stream", []byte(content))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("OSS Sync settings must be rejected, got HTTP %d", response.Code)
+	}
+}
+
 func TestV2UploadCompareAndSwapPreservesContent(t *testing.T) {
 	f := newSyncFixture(t)
 	const path = "notes/正文.md"

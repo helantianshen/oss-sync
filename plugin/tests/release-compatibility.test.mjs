@@ -65,3 +65,21 @@ test("third-party installation files require both opt-ins and cannot include thi
     assert.equal(buildSyncPathFilter(".custom", { ...rules, ...optOut })(".custom/plugins/fixture/main.js"), false);
   }
 });
+
+test("community plugin settings have an independent opt-in and never transfer the enabled list", async (t) => {
+  const { buildSyncPathFilter } = await load(t, "blacklist");
+  for (const dir of [".obsidian", ".custom"]) {
+    const rules = {
+      syncConfiguration: true, syncCommunityPluginSettings: true, ownPluginDir: dir + "/plugins/local-oss",
+      syncExclusions: dir + "/plugins/excluded", syncWhitelist: dir + "/community-plugins.json\n" + dir + "/plugins/oss-sync/**",
+    };
+    const allows = buildSyncPathFilter(dir, rules);
+    assert.equal(allows(dir + "/plugins/fixture/data.json"), true);
+    for (const path of ["community-plugins.json", "plugins/fixture/main.js", "plugins/excluded/data.json",
+      "plugins/oss-sync/data.json", "plugins/local-oss/data.json", "plugins/oss-sync./data.json"]) {
+      assert.equal(allows(dir + "/" + path), false, path);
+    }
+    assert.equal(buildSyncPathFilter(dir, { ...rules, syncConfiguration: false })(dir + "/plugins/fixture/data.json"), false);
+    assert.equal(buildSyncPathFilter(dir, { ...rules, syncCommunityPluginSettings: false, syncCommunityPlugins: true })(dir + "/plugins/fixture/data.json"), false);
+  }
+});

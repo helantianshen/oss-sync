@@ -22,7 +22,7 @@ Use **OSS Sync and Share** from the Obsidian community plugin marketplace. The G
 - **Vaults and device authorization**: multiple Vaults per account, isolated member roles, file paths, and revisions. Device approval and Vault authorization are separate.
 - **Multi-device sync**: create, modify, delete, rename, and move files within folders. HTTP short or long polling follows Vault policy. Empty folders are not independent sync objects.
 - **Durable queue and conflicts**: local work persists across restarts; revision-based CAS with keep local, keep remote, keep both, and merge. Markdown supports three-way merge; binary conflicts preserve copies.
-- **Attachments and configuration**: images, PDFs, and other attachments. Optional configuration sync includes a separate switch for community plugin manifests, scripts, and styles in trusted vaults. Workspace state, caches, private plugin data, and this plugin's installation files stay local.
+- **Attachments and configuration**: images, PDFs, and other attachments. With configuration sync enabled, you can opt in to syncing community plugin installation files and settings separately. Workspace state, caches, each device's enabled community plugins, and OSS Sync's own files stay local.
 - **Web file management**: Markdown, image, PDF, HTML, and SVG previews, with scripts disabled for HTML/SVG previews; text editing through the sync write path. File history, diffs, restore, and recycle bin.
 - **Sharing and public blogs**: individual note and folder links, with an allow-copy toggle. Blogs render dynamically; enabling a public blog does not publish unshared notes.
 - **Markdown collaboration**: invitations, acceptance, and revocation; SSE over HTTPS with long polling for plain HTTP or when SSE is unavailable.
@@ -108,6 +108,7 @@ The Vault-root `.oss-sync-state.json` (v3) stores baselines, pending work, and c
 - The plugin requires an account on the OSS Sync server you configure. It connects to that server for login, file sync, collaboration, sharing, and server administration.
 - The plugin reads the public version manifest from `raw.githubusercontent.com` at startup and every 30 minutes while running to notify you about updates in the Obsidian community plugin marketplace.
 - The plugin enumerates files in the current vault to plan synchronization and applies the configured sync scope before transfer. The **Copy link** action writes the share URL to the system clipboard.
+- Community plugin settings sync uploads the full `data.json` files to the configured server and is off by default. These files may contain credentials or device-specific paths. Use sync exclusions to skip individual plugins.
 
 ## Plugins, blog templates, and console themes
 

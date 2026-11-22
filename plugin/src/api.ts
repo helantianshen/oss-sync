@@ -3,7 +3,7 @@
 // JWT 由插件通过 loadData()/saveData() 持久化
 // 失效或登录失败时抛错，由调用方决定 UI 提示
 
-import { classifySyncPath } from "./blacklist.js";
+import { classifySyncPath, configurationRelativePath, isCommunityPluginSettings } from "./blacklist.js";
 import type { Diagnostics } from "./diagnostics";
 import type { OSSSettings } from "./settings";
 import { isValidOperationID, isValidServerRevision } from "./operation-id.js";
@@ -163,6 +163,7 @@ export interface SyncStrategyResponse {
   effective_mode: SyncMode;
   min_debounce_sec: number;
   long_poll_wait_sec: number;
+  community_plugin_settings?: boolean;
 }
 
 /** 文件历史条目；has_snapshot 表示可读取正文 */
@@ -560,6 +561,8 @@ export class OSSApiClient {
       client_id: this.settings.clientId,
       operation_id: input.operationID,
     });
+    const configPath = configurationRelativePath(input.path, this.configDir);
+    if (configPath !== null && isCommunityPluginSettings(configPath)) query.set("type", "config");
     const requestToken = this.token;
     const headers = this.authHeaders(requestToken);
     try {

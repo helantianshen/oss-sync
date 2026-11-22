@@ -330,6 +330,13 @@ export class OSSSettingTab extends PluginSettingTab {
       }));
     });
 
+    row(this.plugin.t("settings.sync.communityPluginSettings"), this.plugin.t("settings.sync.communityPluginSettingsDesc"), (setting) => {
+      setting.addToggle((toggle) => toggle.setValue(this.plugin.settings.syncCommunityPluginSettings).onChange(async (enabled) => {
+        this.plugin.settings.syncCommunityPluginSettings = enabled;
+        await this.applySyncPathSettings();
+      }));
+    });
+
     for (const { field, name, desc } of [
       { field: "syncExclusions", name: "settings.sync.exclusions", desc: "settings.sync.exclusionsDesc" },
       { field: "syncWhitelist", name: "settings.sync.whitelist", desc: "settings.sync.whitelistDesc" },

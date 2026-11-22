@@ -287,6 +287,10 @@ func (h *Handler) V2Upload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "path contains illegal segments"})
 		return
 	}
+	fileType := classifyFile(path)
+	if c.Query("type") == "config" && isCommunityPluginSettingsPath(path) {
+		fileType = "config"
+	}
 	baseRevision, err := parseInt64Default(c.Query("base_revision"), 0)
 	if err != nil || baseRevision < 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "base_revision must be a non-negative integer"})
@@ -332,7 +336,7 @@ func (h *Handler) V2Upload(c *gin.Context) {
 	var patch []byte
 	baseHash := c.Query("base_hash")
 	if isDelta {
-		if classifyFile(path) != "markdown" || baseRevision == 0 || declaredHash == "" || len(baseHash) != 64 || !isHex(baseHash) {
+		if fileType != "markdown" || baseRevision == 0 || declaredHash == "" || len(baseHash) != 64 || !isHex(baseHash) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": errInvalidDelta.Error(), "code": "delta_invalid"})
 			return
 		}
@@ -480,7 +484,9 @@ func (h *Handler) V2Upload(c *gin.Context) {
 			if !exists {
 				current = models.File{UserID: vault.OwnerID, VaultID: vault.ID, Path: path}
 			}
-			current.Type = classifyFile(path)
+			if current.Type != "config" || !isCommunityPluginSettingsPath(path) {
+				current.Type = fileType
+			}
 			current.Hash = actualHash
 			current.Size = written
 			current.MTime = clientMTime
@@ -930,6 +936,9 @@ func (h *Handler) V2Rename(c *gin.Context) {
 			target = models.File{UserID: vault.OwnerID, VaultID: vault.ID, Path: req.NewPath}
 		}
 		target.Type = classifyFile(req.NewPath)
+		if oldFile.Type == "config" && isCommunityPluginSettingsPath(req.NewPath) {
+			target.Type = "config"
+		}
 		target.Hash = oldFile.Hash
 		target.Size = oldFile.Size
 		target.MTime = req.ClientMTime

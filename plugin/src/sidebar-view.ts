@@ -164,7 +164,7 @@ export class SidebarView extends ItemView {
   /** 渲染冲突区；普通冲突与协作冲突都没有时整段不渲染 */
   private renderConflicts(): void {
     const { plugin } = this;
-    const conflicts = plugin.baseline.conflicts();
+    const conflicts = plugin.syncEngine.listConflicts();
     const collabConflicts = plugin.baseline.collaborationEntries().filter((e) => e.conflict !== null);
     if (conflicts.length === 0 && collabConflicts.length === 0) return;
     const section = this.createSection(plugin.t("sidebar.conflicts"));

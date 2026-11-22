@@ -261,6 +261,32 @@ test("path rules preserve hard exclusions and portable configuration uses the hi
   assert.ok(folders.has(configDir));
 });
 
+test("settings-only sync scans plugin data when supported and skips it on older servers", async (t) => {
+  const { SyncEngine } = await load(t);
+  const root = ".custom";
+  const enabledList = root + "/community-plugins.json";
+  const appearance = root + "/appearance.json";
+  const plugins = root + "/plugins";
+  const plugin = plugins + "/example";
+  const data = plugin + "/data.json";
+  const directories = new Map([
+    [root, { files: [enabledList, appearance], folders: [plugins] }],
+    [plugins, { files: [], folders: [plugin] }],
+    [plugin, { files: [data, plugin + "/main.js"], folders: [] }],
+  ]);
+  const engine = Object.create(SyncEngine.prototype);
+  engine.plugin = { settings: { vaultId: "vault", syncConfiguration: true, syncCommunityPlugins: false, syncCommunityPluginSettings: true } };
+  engine.vault = { configDir: root, adapter: {
+    stat: async (path) => directories.has(path) ? { type: "folder" } : { type: "file", mtime: 1, size: 5 },
+    list: async (path) => directories.get(path),
+  } };
+  let supported = false;
+  engine.strategy = { supportsCommunityPluginSettings: () => supported };
+  assert.deepEqual([...(await engine.scanConfigurationFiles()).keys()], [appearance]);
+  supported = true;
+  assert.deepEqual([...(await engine.scanConfigurationFiles()).keys()], [appearance, data]);
+});
+
 test("the plugin export uses Obsidian Platform flags and retains the saved file if opening fails", async (t) => {
   const m = await load(t);
   const files = new Map();

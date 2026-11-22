@@ -16,6 +16,7 @@ export interface OSSSettings {
   syncConfiguration: boolean;
   autoResolveConfiguration: boolean;
   syncCommunityPlugins: boolean;
+  syncCommunityPluginSettings: boolean;
   syncExclusions: string;
   syncWhitelist: string;
   /** 博客分享时是否保留目录结构*/
@@ -55,6 +56,7 @@ export const DEFAULT_SETTINGS: OSSSettings = {
   syncConfiguration: false,
   autoResolveConfiguration: false,
   syncCommunityPlugins: false,
+  syncCommunityPluginSettings: false,
   syncExclusions: "",
   syncWhitelist: "",
   keepDirectoryTree: true,

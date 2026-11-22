@@ -429,7 +429,9 @@ func (h *Handler) writeFileFromBytes(
 			if !exists {
 				current = models.File{UserID: vault.OwnerID, VaultID: vault.ID, Path: path}
 			}
-			current.Type = classifyFile(path)
+			if current.Type != "config" || !isCommunityPluginSettingsPath(path) {
+				current.Type = classifyFile(path)
+			}
 			current.Hash = hashBytes(content)
 			current.Size = int64(len(content))
 			current.MTime = time.Now().UnixMilli()

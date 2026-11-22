@@ -278,6 +278,12 @@ func classifyFile(path string) string {
 	return "attachment"
 }
 
+func isCommunityPluginSettingsPath(p string) bool {
+	parts := strings.Split(p, "/")
+	n := len(parts)
+	return n >= 4 && strings.EqualFold(parts[n-3], "plugins") && strings.EqualFold(parts[n-1], "data.json")
+}
+
 // isSafeRelativePath 禁止路径逃逸和设备本地状态文件进入同步接口
 func isSafeRelativePath(p string) bool {
 	_, ok := normalizeRelativePath(p)
@@ -304,8 +310,7 @@ func isDeviceLocalObsidianPath(p string) bool {
 	if p == ".obsidian/workspace.json" || p == ".obsidian/workspace-mobile.json" || p == ".obsidian/cache" || strings.HasPrefix(p, ".obsidian/cache/") {
 		return true
 	}
-	parts := strings.Split(p, "/")
-	return len(parts) == 4 && parts[0] == ".obsidian" && parts[1] == "plugins" && parts[3] == "data.json"
+	return strings.EqualFold(p, ".obsidian/plugins/oss-sync/data.json")
 }
 
 // Download 处理 GET /api/sync/download?path=xxx
