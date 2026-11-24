@@ -126,6 +126,8 @@ func New(db *gorm.DB, cfg *config.Config) (*Handler, error) {
 // Register 挂载无需登录的公开分享路由
 func (h *Handler) Register(r *gin.Engine) {
 	r.GET("/", h.handleHome)
+	r.GET("/sitemap.xml", h.handleSitemap)
+	r.GET("/robots.txt", h.handleRobots)
 	r.GET("/b/:vault_id", h.handleVaultBlog)
 	r.GET("/p/:share_id", h.handleSingle)
 	r.GET("/p/:share_id/*subpath", h.handleFolder)

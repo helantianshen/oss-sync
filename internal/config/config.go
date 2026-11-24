@@ -25,8 +25,10 @@ type Config struct {
 
 // ServerConfig 定义 HTTP 服务监听与请求限制
 type ServerConfig struct {
-	Host                 string `yaml:"host"`
-	Port                 int    `yaml:"port"`
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// PublicURL 固定公开网站地图使用的站点地址，留空时根据请求确定。
+	PublicURL            string `yaml:"public_url,omitempty"`
 	Mode                 string `yaml:"mode"`
 	MaxMultipartMemoryMB int64  `yaml:"max_multipart_memory_mb"`
 	MaxFileSizeMB        int64  `yaml:"max_file_size_mb"`
@@ -145,6 +147,9 @@ func (c *Config) applyEnvOverrides() error {
 			c.Server.Port = port
 		}
 	}
+	if v, ok := os.LookupEnv("OSS_SERVER_PUBLIC_URL"); ok {
+		c.Server.PublicURL = v
+	}
 	if v := os.Getenv("OSS_STORAGE_DIR"); v != "" {
 		c.Storage.DataDir = v
 	}
@@ -222,6 +227,16 @@ func (c *Config) validate() error {
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 非法: %d", c.Server.Port)
+	}
+	c.Server.PublicURL = strings.TrimSpace(c.Server.PublicURL)
+	if c.Server.PublicURL != "" {
+		u, err := url.Parse(c.Server.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+			u.User != nil || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" ||
+			(u.EscapedPath() != "" && u.EscapedPath() != "/") {
+			return fmt.Errorf("server.public_url 必须为不含账号、路径、查询参数和片段的 HTTP 或 HTTPS 站点地址")
+		}
+		c.Server.PublicURL = u.Scheme + "://" + u.Host
 	}
 	if c.Sync.DeviceStaleDays < 0 ||
 		c.Sync.ReconcileIntervalHours < 0 ||

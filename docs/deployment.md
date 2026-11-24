@@ -253,6 +253,8 @@ JWT 签名密钥首次启动随机生成并保存在数据库，配置中的 `au
 
 ### Nginx 示例与 SSE
 
+如果 HTTPS 在外层代理终止，而后端只收到内网 HTTP，可在 YAML 的 `server` 下设置 `public_url: "https://sync.example.com"`，或设置环境变量 `OSS_SERVER_PUBLIC_URL=https://sync.example.com`。网站地图和 `robots.txt` 中的地图链接会使用该公网地址。留空时使用请求的域名和协议。
+
 仓库没有独立的 Nginx 配置文件。以下是同一主机终止 TLS、转发到回环 `8080` 的最小示意，需自行替换域名、证书路径并安装管理 Nginx；不是安装器自动执行的步骤：
 
 ```nginx

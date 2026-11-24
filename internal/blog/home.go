@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"github.com/helantianshen/oss-sync/internal/consoletheme"
 	"github.com/helantianshen/oss-sync/internal/filestore"
@@ -196,37 +197,42 @@ func (h *Handler) renderPublicHome(c *gin.Context, data publicHomeData) {
 	}
 }
 
+type publicArticle struct {
+	ShareID     string
+	models.File `gorm:"embedded"`
+}
+
+// publicArticleQuery 保持博客文章列表和网站地图使用相同的公开分享条件。
+func publicArticleQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("shares").
+		Joins("JOIN files ON files.user_id = shares.user_id AND files.vault_id = shares.vault_id AND files.path = shares.target_path").
+		Where("shares.is_folder = ? AND shares.visibility IN ?", false, []string{"public", ""}).
+		Where("files.is_deleted = ? AND files.type = ?", false, "markdown")
+}
+
 // homePosts 列出仓库中公开分享且目标仍存在的 Markdown 文章
-// 密码与登录分享的正文摘要不得进入公开首页，查询阶段即排除
 func (h *Handler) homePosts(userID uint, vaultID string) []HomePost {
-	var shares []models.Share
-	if err := h.DB.Where(
-		"user_id = ? AND vault_id = ? AND is_folder = ? AND (visibility = ? OR visibility = '')",
-		userID, vaultID, false, "public",
-	).Order("created_at desc").Order("share_id asc").Find(&shares).Error; err != nil {
+	var articles []publicArticle
+	if err := publicArticleQuery(h.DB).Select("shares.share_id, files.*").
+		Where("shares.user_id = ? AND shares.vault_id = ?", userID, vaultID).
+		Order("shares.created_at desc").Order("shares.share_id asc").Scan(&articles).Error; err != nil {
 		return nil
 	}
 	var posts []HomePost
-	for _, share := range shares {
-		var f models.File
-		if err := h.DB.Where(
-			"user_id = ? AND vault_id = ? AND path = ? AND is_deleted = ? AND type = ?",
-			userID, vaultID, share.TargetPath, false, "markdown",
-		).First(&f).Error; err != nil {
-			continue
-		}
+	for _, article := range articles {
+		f := article.File
 		abs := filestore.DiskPath(h.Cfg.Storage.DataDir, f)
 		raw, err := readFile(abs)
 		if err != nil {
 			continue
 		}
 		fm, body := splitFrontmatter(string(raw))
-		assetResolver := blogAssetResolver{shareID: share.ShareID}
-		title, meta := buildArticleMeta(fm, body, share.TargetPath, f.UpdatedAt, assetResolver.ResolveAsset)
+		assetResolver := blogAssetResolver{shareID: article.ShareID}
+		title, meta := buildArticleMeta(fm, body, f.Path, f.UpdatedAt, assetResolver.ResolveAsset)
 		posts = append(posts, HomePost{
 			Title:     title,
 			Summary:   meta.Summary,
-			URL:       "/p/" + share.ShareID,
+			URL:       "/p/" + article.ShareID,
 			Date:      meta.Date,
 			Time:      f.UpdatedAt,
 			Category:  meta.Category,
