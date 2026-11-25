@@ -7,12 +7,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { build } from "esbuild";
 
+globalThis.window ??= { setTimeout, clearTimeout };
+
 async function load(t) {
   const dir = await mkdtemp(join(tmpdir(), "oss-mobile-diagnostics-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const outfile = join(dir, "test.mjs");
   await build({
-    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine", "settings-tab", "markdown-delta", "ordinary-sync-file-access"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    stdin: { contents: ["diagnostic-report", "diagnostics", "blacklist", "http-transport", "api", "sync-engine", "sync-run-coordinator", "settings-tab", "markdown-delta", "ordinary-sync-file-access"].map((name) => `export * from './src/${name}.ts';`).join("\n") + '\nexport {default as OSSPlugin} from "./src/main.ts";export {SidebarView} from "./src/sidebar-view.ts";\nexport {host,Platform} from "obsidian";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
     outfile, bundle: true, platform: "node", format: "esm",
     plugins: [{ name: "mobile-host", setup(builder) {
       builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "host" }));
@@ -103,6 +105,117 @@ test("mobile file downloads skip the native JSON getter and preserve every byte"
   assert.doesNotMatch(JSON.stringify(diagnostics.snapshot()), /PRIVATE-NOTE-BODY|SECRET-TOKEN|SECRET-COOKIE|secret-vault/);
   diagnostics.record({ kind: "api_failed", at: 2, method: "GET", path: "/api/test", message: "Unexpected token PRIVATE-NOTE-BODY is not valid JSON" });
   assert.doesNotMatch(JSON.stringify(diagnostics.snapshot()), /PRIVATE-NOTE-BODY/);
+});
+
+test("share API rejection appears in diagnostic failures without its response body", async (t) => {
+  const { OSSApiClient, Diagnostics, host } = await load(t);
+  const diagnostics = new Diagnostics();
+  host.request = async () => ({
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+    text: '{"error":"source file not found: PRIVATE-NOTE.md"}',
+    arrayBuffer: new ArrayBuffer(0),
+  });
+  const api = new OSSApiClient({ serverUrl: "https://example.invalid", vaultId: "test-vault" }, diagnostics);
+  await assert.rejects(api.createShare({
+    targetPath: "PRIVATE-NOTE.md", isFolder: false, allowCopy: true, recursiveBacklinks: true,
+  }), /source file not found: PRIVATE-NOTE\.md/);
+  const failure = diagnostics.failureSnapshot().find(({ kind }) => kind === "api_failed");
+  assert.equal(failure.path, "/api/shares");
+  assert.equal(failure.status, 400);
+  assert.equal(failure.message, "HTTP 400");
+});
+
+test("an explicit share flush waits for the queued rename and preserves conflicts", async (t) => {
+  const { SyncEngine } = await load(t);
+  const path = "notes/renamed.md";
+  const operation = { path, oldPath: "notes/untitled.md", kind: "rename" };
+  let pending = [operation];
+  let conflictPath;
+  let finishUpload = false;
+  let runs = 0;
+  const engine = {
+    enqueueChain: Promise.resolve(),
+    started: false,
+    api: { hasToken: () => true },
+    plugin: { settings: { vaultId: "test-vault" } },
+    baseline: { load: async () => {}, pending: () => pending, getConflict: (target) => target === conflictPath },
+    isSyncPath: () => true,
+    debounceFn: { cancel() {} },
+    runOnce: async (options) => {
+      assert.deepEqual(options, { forceFull: false });
+      runs++;
+      if (finishUpload) pending = [];
+    },
+  };
+  const flush = (options) => SyncEngine.prototype.flushFile.call(engine, path, options);
+  assert.equal(await flush(), true);
+  assert.equal(runs, 0);
+  conflictPath = operation.oldPath;
+  assert.equal(await flush({ explicit: true }), false);
+  assert.equal(runs, 0);
+  conflictPath = undefined;
+  assert.equal(await flush({ explicit: true }), false);
+  finishUpload = true;
+  assert.equal(await flush({ explicit: true }), true);
+  assert.equal(runs, 2);
+});
+
+test("a stalled sync request times out and the queued sync can finish", async (t) => {
+  const m = await load(t);
+  const deadlines = new Map();
+  let timerID = 0;
+  const previousWindow = globalThis.window;
+  globalThis.window = {
+    setTimeout(callback, delay) { deadlines.set(++timerID, { callback, delay }); return timerID; },
+    clearTimeout(id) { deadlines.delete(id); },
+  };
+  t.after(() => { globalThis.window = previousWindow; });
+  let receiveLate;
+  let requests = 0;
+  const response = (value) => ({ status: 200, text: JSON.stringify(value), arrayBuffer: new ArrayBuffer(0), headers: {} });
+  m.host.request = () => ++requests === 1
+    ? new Promise((resolve) => { receiveLate = resolve; })
+    : Promise.resolve(response({ head_revision: 2, next_cursor: 2, server_time: Date.now(), files: [] }));
+  const events = [];
+  m.setTransportDiagnosticSink((stage, details) => events.push({ stage, details }));
+  const api = new m.OSSApiClient({ serverUrl: "https://example.invalid", clientId: "test-device" });
+  const coordinator = new m.SyncRunCoordinator();
+  const runs = [];
+  const task = async (forceFull) => {
+    runs.push(forceFull);
+    try {
+      await api.changes("vault", 1, 30);
+      return true;
+    } catch (error) {
+      assert.ok(error instanceof m.SyncRequestTimeoutError);
+      return false;
+    }
+  };
+  const first = coordinator.run(false, task);
+  const queued = coordinator.run(true, task);
+  assert.equal(coordinator.isRunning, true);
+  const deadline = deadlines.get(1);
+  assert.equal(deadline.delay, 60_000);
+  deadline.callback();
+  assert.deepEqual(await Promise.all([first, queued]), [true, true]);
+  assert.deepEqual(runs, [false, true]);
+  assert.equal(coordinator.isRunning, false);
+  assert.equal(deadlines.size, 0);
+
+  receiveLate(response({ next_cursor: 101 }));
+  await Promise.resolve();
+  assert.ok(events.some(({ stage, details }) => stage === "request_failed" && details.code === "sync_request_timeout"));
+  assert.equal(events.filter(({ stage }) => stage === "response_received").length, 1);
+});
+
+test("coalesced callers see the queued sync failure", async (t) => {
+  const { SyncRunCoordinator } = await load(t);
+  const coordinator = new SyncRunCoordinator();
+  const first = coordinator.run(false, async (forceFull) => !forceFull);
+  const queued = coordinator.run(true, async () => { throw new Error("parallel task is unexpected"); });
+  assert.deepEqual(await Promise.all([first, queued]), [false, false]);
+  assert.equal(await coordinator.run(true, async () => true), true);
 });
 
 test("large Markdown uploads and downloads exchange small deltas and verify reconstructed bytes", async (t) => {
@@ -471,7 +584,15 @@ test("only explicit SQLite busy failures get two bounded retries for the same do
   const m = await load(t);
   const previousWindow = globalThis.window;
   const delays = [];
-  globalThis.window = { setTimeout: (callback, delay) => { delays.push(delay); queueMicrotask(callback); return 0; } };
+  globalThis.window = {
+    setTimeout(callback, delay) {
+      if (delay >= 30_000) return setTimeout(callback, delay);
+      delays.push(delay);
+      queueMicrotask(callback);
+      return 0;
+    },
+    clearTimeout,
+  };
   t.after(() => { if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow; });
   const diagnostics = new m.Diagnostics();
   const requests = [];

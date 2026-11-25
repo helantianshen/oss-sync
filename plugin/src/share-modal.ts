@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting, TFile, TFolder } from "obsidian";
+import { normalizePath } from "./baseline";
 import type OSSPlugin from "./main";
 import { renderShareGuideEntry } from "./share-guide-modal";
 
@@ -50,7 +51,12 @@ export class ShareModal extends Modal {
       )
       .addButton((btn) =>
         btn.setButtonText(this.plugin.t("share.generate")).onClick(async () => {
-          await this.create();
+          btn.setDisabled(true);
+          try {
+            await this.create();
+          } finally {
+            btn.setDisabled(false);
+          }
         })
       );
   }
@@ -61,8 +67,16 @@ export class ShareModal extends Modal {
 
   private async create(): Promise<void> {
     try {
+      const targetPath = this.file.path;
+      const vaultId = this.plugin.settings.vaultId;
+      if (!this.isFolder && !(await this.plugin.syncEngine.flushFile(normalizePath(targetPath), { explicit: true }))) {
+        throw new Error(this.plugin.t("share.syncIncomplete"));
+      }
+      if (targetPath !== this.file.path || vaultId !== this.plugin.settings.vaultId) {
+        throw new Error(this.plugin.t("share.targetChanged"));
+      }
       const res = await this.plugin.api.createShare({
-        targetPath: this.targetPath,
+        targetPath,
         isFolder: this.isFolder,
         allowCopy: this.allowCopy,
         recursiveBacklinks: this.recursive,

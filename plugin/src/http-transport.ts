@@ -39,6 +39,16 @@ export interface HttpRequest {
   readonly method: "GET" | "POST" | "PATCH" | "DELETE";
   readonly headers: Record<string, string>;
   readonly body?: string | ArrayBuffer;
+  readonly timeoutMs?: number;
+}
+
+export class SyncRequestTimeoutError extends Error {
+  readonly code = "sync_request_timeout";
+
+  constructor(timeoutMs: number) {
+    super(`Sync request timed out after ${timeoutMs} ms`);
+    this.name = "SyncRequestTimeoutError";
+  }
 }
 
 /** 统一响应；json 在响应体非 JSON 或为空时为 null */
@@ -73,7 +83,7 @@ function parseJSONBody(text: string): unknown {
   try { return JSON.parse(body); } catch { return null; }
 }
 
-async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
+async function viaRequestUrl(request: HttpRequest, signal?: AbortSignal): Promise<HttpResponse> {
   try {
     const res = await requestUrl({
       url: request.url,
@@ -82,6 +92,7 @@ async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
       body: request.body,
       throw: false,
     });
+    if (signal?.aborted) throw signal.reason;
     trace(request, "response_received", responseDetails(res));
     const text = res.text;
     const response: HttpResponse = {
@@ -94,13 +105,13 @@ async function viaRequestUrl(request: HttpRequest): Promise<HttpResponse> {
     reportNonJson(request.url, response.status, response.text);
     return response;
   } catch (error) {
-    if (!Platform.isDesktop || !isRetryableJsonFailure(error, request.method)) throw error;
+    if (signal?.aborted || !Platform.isDesktop || !isRetryableJsonFailure(error, request.method)) throw error;
     trace(request, "fallback", { driver: "node", ...diagnosticErrorDetails(error) });
-    return viaNodeHttps(request);
+    return viaNodeHttps(request, signal);
   }
 }
 
-async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
+async function viaNodeHttps(request: HttpRequest, signal?: AbortSignal): Promise<HttpResponse> {
   const target = new URL(request.url);
   if (Platform.isDesktop) {
     const transport = target.protocol === "http:" ? await import("http") : await import("https");
@@ -120,6 +131,7 @@ async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
             port: target.port || (target.protocol === "https:" ? 443 : 80),
             path: `${target.pathname}${target.search}`,
             method: request.method,
+            signal,
             headers: {
               ...request.headers,
               ...(payload ? { "Content-Length": String(payload.byteLength) } : {}),
@@ -127,6 +139,7 @@ async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
           },
           (res) => {
             const chunks: Buffer[] = [];
+            res.on("error", reject);
             res.on("data", (chunk: Buffer) => chunks.push(chunk));
             res.on("end", () => {
               resolve({
@@ -161,18 +174,39 @@ async function viaNodeHttps(request: HttpRequest): Promise<HttpResponse> {
   throw new Error("Node transport is only available on desktop");
 }
 
-/** 发送请求；Chromium 网络栈重定向循环时自动降级到原生 https */
+async function sendRequest(request: HttpRequest, signal?: AbortSignal): Promise<HttpResponse> {
+  try {
+    return await viaRequestUrl(request, signal);
+  } catch (error) {
+    if (signal?.aborted || !Platform.isDesktop || !isRedirectLoop(error)) throw error;
+    trace(request, "fallback", { driver: "node" });
+    return viaNodeHttps(request, signal);
+  }
+}
+
+/** 发送请求；同步请求即使一直没有响应，也能结束等待并释放本轮同步。 */
 export async function httpRequest(request: HttpRequest): Promise<HttpResponse> {
   const startedAt = Date.now();
   diagnosticRequestIDs.set(request, ++diagnosticRequestSequence);
   trace(request, "request_started");
+  let timer: number | undefined;
   try {
-    return await viaRequestUrl(request);
+    const timeoutMs = request.timeoutMs;
+    if (timeoutMs === undefined) return await sendRequest(request);
+    const controller = new AbortController();
+    const deadline = new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => {
+        const error = new SyncRequestTimeoutError(timeoutMs);
+        controller.abort(error);
+        reject(error);
+      }, timeoutMs);
+    });
+    return await Promise.race([sendRequest(request, controller.signal), deadline]);
   } catch (error) {
     trace(request, "request_failed", { durationMs: Date.now() - startedAt, ...diagnosticErrorDetails(error) });
-    if (!Platform.isDesktop || !isRedirectLoop(error)) throw error;
-    trace(request, "fallback", { driver: "node" });
-    return viaNodeHttps(request);
+    throw error;
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
   }
 }
 

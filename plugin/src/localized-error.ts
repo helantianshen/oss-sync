@@ -61,6 +61,7 @@ function isJsonParseError(error: unknown): boolean {
 /** 把错误转成用户可读的本地化文本；无法识别时退回原始消息或 fallback */
 export function localizeError(error: unknown, t: Translator, fallback: string): string {
   const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+  if (code === "sync_request_timeout") return t("network.connectionTimedOut");
   for (const [candidate, key] of AUTH_CODE_KEYS) {
     if (code === candidate) return t(key);
   }

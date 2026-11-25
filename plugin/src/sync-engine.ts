@@ -13,6 +13,7 @@ import { buildSyncPathFilter, shouldSync, classifySyncPath, configurationRelativ
 import type { ConflictResolution } from "./conflict-modal.js";
 import type { Diagnostics } from "./diagnostics.js";
 import { diagnosticErrorDetails } from "./diagnostic-report";
+import { SyncRequestTimeoutError } from "./http-transport";
 import { localizeError } from "./localized-error.js";
 import type OSSPlugin from "./main.js";
 import { NoticeGuard } from "./notice-guard.js";
@@ -145,14 +146,18 @@ export class SyncEngine {
     await this.enqueueChain;
   }
 
-  /** 正文离开焦点时，等该文件入队后立即发起一轮增量同步。 */
-  async flushFile(path: string): Promise<void> {
+  /** 正文离开焦点或主动分享时，先处理该文件已入队的变更。 */
+  async flushFile(path: string, options: { readonly explicit?: boolean } = {}): Promise<boolean> {
     await this.enqueueChain;
-    if (!this.started || !this.api.hasToken() || !this.plugin.settings.vaultId || !this.isSyncPath(path)) return;
+    if ((!this.started && !options.explicit) || !this.api.hasToken() || !this.plugin.settings.vaultId || !this.isSyncPath(path)) return true;
+    await this.baseline.load();
     const pending = this.baseline.pending().find((operation) => operation.path === path && operation.kind !== "delete");
-    if (!pending || this.baseline.getConflict(path) || (pending.oldPath && this.baseline.getConflict(pending.oldPath))) return;
+    if (!pending) return true;
+    if (this.baseline.getConflict(path) || (pending.oldPath && this.baseline.getConflict(pending.oldPath))) return false;
     this.debounceFn.cancel();
     await this.runOnce({ forceFull: false });
+    return !this.baseline.pending().some((operation) => operation.path === path && operation.kind !== "delete") &&
+      !this.baseline.getConflict(path);
   }
 
   /** 重建轮询：无令牌或未绑定 vault 时不启动，长轮询模式下直接进入长轮询 */
@@ -260,7 +265,7 @@ export class SyncEngine {
         this.resetPolling();
       }
     } catch (error: unknown) {
-      if (error instanceof OSSApiError) return;
+      if (error instanceof OSSApiError || error instanceof SyncRequestTimeoutError) return;
       throw error;
     }
   }
@@ -394,12 +399,10 @@ export class SyncEngine {
    * 执行一轮同步，返回是否全部动作成功
    * 并发调用由 runCoordinator 合并，同刻只有一个 executeRun 在跑，避免重复应用同一批 pending
    */
-  async runOnce(opts: { readonly forceFull: boolean }): Promise<boolean> {
-    let succeeded = true;
-    await this.runCoordinator.run(opts.forceFull, async (forceFull) => {
-      succeeded = await this.executeRun(forceFull);
-    });
-    return succeeded;
+  runOnce(opts: { readonly forceFull: boolean }): Promise<boolean> {
+    this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "sync_run",
+      stage: this.runCoordinator.isRunning ? "queued" : "requested", details: {} });
+    return this.runCoordinator.run(opts.forceFull, (forceFull) => this.executeRun(forceFull));
   }
 
   /**
@@ -412,10 +415,18 @@ export class SyncEngine {
       this.plugin.setSyncState("error", this.plugin.t(!this.api.hasToken() ? "sync.notLoggedIn" : "sync.vaultNotBound"));
       return false;
     }
-    this.plugin.setSyncState("syncing");
-    await this.enqueueChain;
+    let stage = "local_queue";
+    const markStage = (next: string) => {
+      stage = next;
+      this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "sync_run", stage, details: {} });
+    };
     try {
+      this.plugin.setSyncState("syncing");
+      markStage("local_queue");
+      await this.enqueueChain;
+      markStage("server_strategy");
       await this.applyStrategy();
+      markStage("load_baseline");
       await this.baseline.load();
       const pathScope = this.currentPathScope();
       for (const operation of this.baseline.pending()) {
@@ -452,10 +463,12 @@ export class SyncEngine {
       if (configurationConflicts.length) this.configurationSnapshotNeeded = true;
       full ||= this.configurationSnapshotNeeded;
       this.splitConfigurationRenames();
+      markStage("local_scan");
       this.configurationFiles = await this.scanConfigurationFiles();
       await this.discoverLocalChanges(full || Date.now() - this.lastContentCheck >= 600_000);
       // 待办删除但基线无对应条目，说明该文件从未同步过，只有全量快照能判断远端是否已不存在
       if (this.needsFullSnapshotForDeletes(this.baseline.pending())) full = true;
+      markStage("remote_snapshot");
       const remote = await this.fetchRemote(vaultID, full);
       for (const { path } of configurationConflicts) {
         if (this.usesAutomaticConfiguration(path)) this.baseline.removeConflict(path);
@@ -471,6 +484,7 @@ export class SyncEngine {
         remoteFiles: remote.files.size,
         pendingCount: pending.length,
       });
+      markStage("apply_changes");
       if (remote.recoverySnapshot) {
         await this.prepareRecoveryRenames(pending, remote.files);
         pending = this.baseline.pending();
@@ -511,6 +525,7 @@ export class SyncEngine {
         return false;
       }
       // 先向服务端确认游标再落库：确认失败时基线保持旧游标，下一轮重新拉取同一批变更
+      markStage("acknowledge_cursor");
       await this.api.acknowledge(vaultID, remote.nextCursor);
       this.baseline.setCursor(remote.nextCursor);
       await this.baseline.save();
@@ -544,7 +559,8 @@ export class SyncEngine {
         forceFull,
         cursor: this.baseline.getCursor(),
       });
-      this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "sync_run", stage: "failed", details: diagnosticErrorDetails(error) });
+      this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "sync_run", stage: "failed",
+        details: { action: stage, ...diagnosticErrorDetails(error) } });
       const message = this.localizedError(error);
       this.plugin.setSyncState("error", message);
       // 轮询与手动同步共用该路径，冷却期内重复失败只提示一次，状态栏持续展示

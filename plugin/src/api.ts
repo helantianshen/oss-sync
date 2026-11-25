@@ -8,11 +8,14 @@ import type { Diagnostics } from "./diagnostics";
 import type { OSSSettings } from "./settings";
 import { isValidOperationID, isValidServerRevision } from "./operation-id.js";
 import { httpRequest, type HttpResponse } from "./http-transport.js";
-import { diagnosticErrorDetails } from "./diagnostic-report";
+import { diagnosticErrorDetails, diagnosticRoute } from "./diagnostic-report";
 import {
   applyMarkdownDelta, buildMarkdownDelta, canUseMarkdownDelta,
   DELTA_CONTENT_TYPE, DELTA_SIGNATURE_TYPE, markdownSignature,
 } from "./markdown-delta";
+
+const SYNC_CONTROL_TIMEOUT_MS = 30_000;
+const SYNC_TRANSFER_TIMEOUT_MS = 15 * 60_000;
 
 /** 登录响应；device_status 为 pending 时令牌可用但需等待授权 */
 export interface AuthResponse {
@@ -498,7 +501,9 @@ export class OSSApiClient {
       `/api/vaults/${encodeURIComponent(vaultID)}/sync/manifest` +
         `?after=${encodeURIComponent(String(after))}` +
         `&limit=500&wait=${encodeURIComponent(String(waitSeconds))}` +
-        `&client_id=${encodeURIComponent(this.settings.clientId)}`
+        `&client_id=${encodeURIComponent(this.settings.clientId)}`,
+      undefined,
+      SYNC_CONTROL_TIMEOUT_MS + waitSeconds * 1000,
     );
     this.updateTimeOffset(result.server_time, before, Date.now());
     this.markdownDeltaSource = result.delta_v1 === true ? source : "";
@@ -514,7 +519,9 @@ export class OSSApiClient {
       `/api/vaults/${encodeURIComponent(vaultID)}/sync/changes` +
         `?after=${encodeURIComponent(String(after))}` +
         `&limit=500&wait=${encodeURIComponent(String(waitSeconds))}` +
-        `&client_id=${encodeURIComponent(this.settings.clientId)}`
+        `&client_id=${encodeURIComponent(this.settings.clientId)}`,
+      undefined,
+      SYNC_CONTROL_TIMEOUT_MS + waitSeconds * 1000,
     );
     this.updateTimeOffset(result.server_time, before, Date.now());
     this.markdownDeltaSource = result.delta_v1 === true ? source : "";
@@ -529,7 +536,8 @@ export class OSSApiClient {
       {
         client_id: this.settings.clientId,
         cursor,
-      }
+      },
+      SYNC_CONTROL_TIMEOUT_MS,
     );
   }
 
@@ -573,6 +581,7 @@ export class OSSApiClient {
           method: "POST",
           headers: { "Content-Type": type, ...headers },
           body: content,
+          timeoutMs: SYNC_TRANSFER_TIMEOUT_MS,
         });
         status = response.status;
         return response;
@@ -583,6 +592,7 @@ export class OSSApiClient {
           url: `${endpoint}/delta-base?${baseQuery.toString()}`,
           method: "GET",
           headers,
+          timeoutMs: SYNC_CONTROL_TIMEOUT_MS,
         });
         if (signature.status >= 400 && ![404, 405, 409, 415].includes(signature.status)) {
           await this.parseResponse<never>(signature.status, signature.json, signature.text, requestToken);
@@ -656,6 +666,7 @@ export class OSSApiClient {
             method: signature ? "POST" : "GET",
             headers: signature ? { "Content-Type": DELTA_SIGNATURE_TYPE, ...headers } : headers,
             body: signature,
+            timeoutMs: SYNC_TRANSFER_TIMEOUT_MS,
           });
           status = response.status;
           if (response.status >= 400 && !(signature && [404, 405, 415].includes(response.status))) {
@@ -749,7 +760,8 @@ export class OSSApiClient {
         client_id: this.settings.clientId,
         operation_id: input.operationID,
         client_mtime: input.mtime,
-      }
+      },
+      SYNC_TRANSFER_TIMEOUT_MS,
     );
   }
 
@@ -776,7 +788,8 @@ export class OSSApiClient {
         client_id: this.settings.clientId,
         operation_id: input.operationID,
         client_mtime: input.mtime,
-      }
+      },
+      SYNC_TRANSFER_TIMEOUT_MS,
     );
   }
 
@@ -786,7 +799,9 @@ export class OSSApiClient {
       "GET",
       `/api/vaults/${encodeURIComponent(vaultID)}/sync/strategy` +
         `?client_id=${encodeURIComponent(this.settings.clientId)}` +
-        `&mode=${encodeURIComponent(mode)}`
+        `&mode=${encodeURIComponent(mode)}`,
+      undefined,
+      SYNC_CONTROL_TIMEOUT_MS,
     );
   }
 
@@ -1221,7 +1236,8 @@ export class OSSApiClient {
   private async doRequest<T>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
-    body?: unknown
+    body?: unknown,
+    timeoutMs?: number,
   ): Promise<T> {
     const startedAt = Date.now();
     let status: number | undefined;
@@ -1235,18 +1251,20 @@ export class OSSApiClient {
           ...this.authHeaders(requestToken),
         },
         body: body ? JSON.stringify(body) : undefined,
+        timeoutMs,
       });
       status = res.status;
-      return this.parseResponse<T>(res.status, res.json, res.text, requestToken);
+      return await this.parseResponse<T>(res.status, res.json, res.text, requestToken);
     } catch (error) {
       if (error instanceof OSSApiError) status = error.status;
       this.diagnostics?.record({
         kind: "api_failed",
         at: Date.now(),
         method,
-        path,
+        path: diagnosticRoute(this.url(path)),
         ...(typeof status === "number" ? { status } : {}),
-        message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        message: error instanceof OSSApiError ? `HTTP ${error.status}`
+          : error instanceof Error ? `${error.name}: ${error.message}` : String(error),
       });
       throw error;
     } finally {
