@@ -22,6 +22,7 @@ const AUTH_ERROR_KEYS: ReadonlyArray<readonly [string, TranslationKey]> = [
 
 const AUTH_CODE_KEYS: ReadonlyArray<readonly [string, TranslationKey]> = [
   ["token_expired", "auth.tokenExpired"],
+  ["token_invalid", "auth.sessionRejected"],
   ["device_pending", "auth.devicePending"],
   ["device_revoked", "auth.deviceRevoked"],
   ["device_not_authorized", "auth.deviceUnauthorized"],

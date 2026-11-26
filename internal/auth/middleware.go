@@ -20,10 +20,11 @@ const ContextKeyCurrentUser = "oss.current_user"
 const ContextKeyIdentity = "oss.auth_identity"
 
 var (
-	errNoAuth       = errors.New("missing Authorization header")
-	errBadScheme    = errors.New("unsupported auth scheme")
-	errBadCred      = errors.New("invalid credentials")
-	errUserNotFound = errors.New("user not found")
+	errNoAuth          = errors.New("missing Authorization header")
+	errBadScheme       = errors.New("unsupported auth scheme")
+	errBadCred         = errors.New("invalid credentials")
+	errUserNotFound    = errors.New("user not found")
+	errAuthUnavailable = errors.New("authentication temporarily unavailable")
 )
 
 // Identity 为认证中间件建立的请求身份
@@ -151,11 +152,20 @@ func OptionalMiddleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// abortUnauthorized 按固定格式写未授权响应
+// abortUnauthorized 区分凭据错误与暂时无法验证凭据。
 func abortUnauthorized(c *gin.Context, err error) {
+	if errors.Is(err, errAuthUnavailable) {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": errAuthUnavailable.Error(), "code": "auth_unavailable"})
+		return
+	}
 	body := gin.H{"error": "unauthorized: " + err.Error()}
-	if errors.Is(err, jwt.ErrExpired) {
+	switch {
+	case errors.Is(err, jwt.ErrExpired):
 		body["code"] = "token_expired"
+	case errors.Is(err, errNoAuth):
+		body["code"] = "authorization_missing"
+	case errors.Is(err, errBadCred), errors.Is(err, errUserNotFound):
+		body["code"] = "token_invalid"
 	}
 	c.AbortWithStatusJSON(http.StatusUnauthorized, body)
 }

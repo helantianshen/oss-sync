@@ -573,11 +573,84 @@ test("saved credentials are verified, waiting approval is distinguished, and rej
   reply(200, { vaults: [] });
   await api.listVaults();
   assert.equal(api.getSessionStatus(), "approved");
+  reply(401, { error: "unauthorized: missing Authorization header", code: "authorization_missing" });
+  await assert.rejects(api.listVaults());
+  assert.equal(api.getSessionStatus(), "checking");
+  assert.equal(api.hasToken(), true);
+  reply(401, { error: "gateway denied the request" });
+  await assert.rejects(api.listVaults());
+  assert.equal(api.hasToken(), true);
+  reply(503, { error: "authentication temporarily unavailable", code: "auth_unavailable" });
+  await assert.rejects(api.listVaults());
+  assert.equal(api.hasToken(), true);
+  assert.equal(rejected.length, 0);
   reply(401, { error: "unauthorized: invalid signature" });
   await assert.rejects(api.listVaults());
   assert.equal(api.getSessionStatus(), "signedOut");
   assert.equal(api.hasToken(), false);
   assert.equal(rejected.length, 1);
+  for (const [status, code] of [[401, "token_expired"], [401, "token_invalid"], [403, "device_revoked"]]) {
+    api.setToken("saved-token");
+    reply(status, { error: "unauthorized", code });
+    await assert.rejects(api.listVaults());
+    assert.equal(api.getSessionStatus(), "signedOut");
+    assert.equal(rejected.at(-1).code, code);
+  }
+});
+
+test("startup preserves stored credentials on a missing header and resumes without a password", async (t) => {
+  const m = await load(t);
+  const savedToken = "header." + Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url") + ".signature";
+  const data = { serverUrl: "https://example.invalid", vaultId: "v1", vaultName: "Vault",
+    clientId: "device", deviceName: "Laptop", token: savedToken, password: "old-password" };
+  const saves = [];
+  const actions = [];
+  const plugin = Object.create(m.OSSPlugin.prototype);
+  Object.assign(plugin, {
+    loaded: true,
+    app: { workspace: { getLeavesOfType: () => [] } },
+    loadData: async () => (saves.at(-1) ?? data),
+    saveData: async (value) => { saves.push(value); },
+    syncEngine: { start() { actions.push("start"); }, runOnce({ forceFull }) { actions.push(forceFull); } },
+    collabManager: { start() { actions.push("collab"); } },
+    syncErrorNotices: { shouldShow: () => false },
+    registerServerPluginCommands: async () => {},
+    diagnostics: new m.Diagnostics(),
+  });
+  await plugin.loadSettings();
+  assert.equal(plugin.token, savedToken);
+  assert.equal(plugin.settings.password, "");
+  const api = new m.OSSApiClient(plugin.settings, plugin.diagnostics, async () => assert.fail("cleared saved credentials"));
+  api.setToken(plugin.token);
+  plugin.api = api;
+  m.setTransportDiagnosticSink((stage, details) => plugin.diagnostics.record({
+    kind: "detail", at: 1, area: "transport", stage, details,
+  }));
+  let attempts = 0;
+  m.host.request = async (input) => {
+    assert.equal(new URL(input.url).pathname, "/api/vaults");
+    assert.equal(input.headers.Authorization, "Bearer " + savedToken);
+    const first = attempts++ === 0;
+    const text = JSON.stringify(first
+      ? { error: "unauthorized: missing Authorization header" }
+      : { vaults: [{ id: "v1", name: "Vault" }] });
+    return { status: first ? 401 : 200, text, arrayBuffer: new TextEncoder().encode(text).buffer, headers: {} };
+  };
+  await plugin.resumeSavedSession();
+  assert.equal(api.getSessionStatus(), "checking");
+  assert.equal(attempts, 1);
+  assert.deepEqual(actions, []);
+  assert.deepEqual(saves, []);
+  const failure = plugin.diagnostics.failureSnapshot().find((event) => event.area === "session");
+  assert.deepEqual(failure.details, { status: 401, code: "authorization_missing", action: "retained" });
+  const request = plugin.diagnostics.snapshot().find((event) => event.stage === "request_started");
+  assert.equal(request.details.hasAuthorization, true);
+  assert.equal(JSON.stringify(plugin.diagnostics.snapshot()).includes(savedToken), false);
+  await plugin.resumeSavedSession();
+  assert.equal(api.getSessionStatus(), "approved");
+  assert.deepEqual(actions, ["start", "collab", true]);
+  assert.equal(saves.at(-1).token, savedToken);
+  assert.equal(saves.at(-1).password, "");
 });
 
 test("only explicit SQLite busy failures get two bounded retries for the same download", async (t) => {

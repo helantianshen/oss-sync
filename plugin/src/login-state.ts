@@ -35,20 +35,3 @@ export function shouldInitializeAuthorizedSession(
 ): boolean {
   return deviceStatus !== "pending";
 }
-
-// isTokenExpired 判断 JWT 是否已过期；解析失败按过期处理，迫使重新登录
-export function isTokenExpired(token: string): boolean {
-  const parts = token.split(".");
-  if (parts.length !== 3) return true;
-  try {
-    const payload = JSON.parse(
-      new TextDecoder().decode(
-        Uint8Array.from(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")), (ch) => ch.charCodeAt(0))
-      )
-    ) as { exp?: unknown };
-    if (typeof payload.exp !== "number") return true;
-    return payload.exp * 1000 <= Date.now();
-  } catch {
-    return true;
-  }
-}

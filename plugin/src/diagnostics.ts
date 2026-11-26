@@ -1,7 +1,7 @@
 import { redactDiagnosticText, sanitizeDiagnosticDetails, type DiagnosticDetails } from "./diagnostic-report";
 
 export type DiagnosticEvent =
-  | { readonly kind: "detail"; readonly at: number; readonly area: "transport" | "download" | "sync_action" | "sync_run"; readonly stage: string; readonly details: DiagnosticDetails }
+  | { readonly kind: "detail"; readonly at: number; readonly area: "transport" | "download" | "sync_action" | "sync_run" | "session"; readonly stage: string; readonly details: DiagnosticDetails }
   | {
       readonly kind: "plugin_version_check";
       readonly at: number;

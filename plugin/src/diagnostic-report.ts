@@ -47,7 +47,7 @@ export function diagnosticErrorDetails(error: unknown): DiagnosticDetails {
 }
 
 export function sanitizeDiagnosticDetails(details: DiagnosticDetails): DiagnosticDetails {
-  const allowed = new Set(["requestId", "path", "route", "method", "driver", "status", "bytes", "expectedBytes", "revision", "durationMs", "attempt", "delayMs", "contentType", "contentLength", "hasHash", "responseRevision", "errorName", "errorMessage", "errorStack", "code", "action", "localState", "writeResult"]);
+  const allowed = new Set(["requestId", "path", "route", "method", "driver", "status", "bytes", "expectedBytes", "revision", "durationMs", "attempt", "delayMs", "contentType", "contentLength", "hasHash", "responseRevision", "errorName", "errorMessage", "errorStack", "code", "action", "localState", "writeResult", "hasAuthorization"]);
   const safe: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(details)) {
     if (!allowed.has(key)) continue;

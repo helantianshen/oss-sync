@@ -53,7 +53,7 @@ import {
   loginWithRevokedDeviceRecovery,
   type DeviceLoginRecoveryResult,
 } from "./device-login-recovery";
-import { isTokenExpired, shouldInitializeAuthorizedSession } from "./login-state";
+import { shouldInitializeAuthorizedSession } from "./login-state";
 import {
   resolveLanguage,
   translate,
@@ -419,7 +419,7 @@ export default class OSSPlugin extends Plugin {
     await this.app.workspace.revealLeaf(leaf);
   }
 
-  /** 从磁盘加载设置，与默认值合并，过期令牌不恢复，密码始终置空 */
+  /** 从磁盘恢复设置和待验证的令牌；密码始终置空。 */
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as PluginData | null;
     let hadLegacyLocalState = false;
@@ -427,8 +427,7 @@ export default class OSSPlugin extends Plugin {
       const { token, syncPoisonObsidianFiles, ...settings } = data as PluginData & { syncPoisonObsidianFiles?: boolean };
       hadLegacyLocalState = syncPoisonObsidianFiles !== undefined;
       this.settings = Object.assign({}, DEFAULT_SETTINGS, settings);
-      // 过期令牌不恢复：否则 isLoggedIn 为真但请求全部 401，设置页又不渲染登录表单
-      this.token = token && !isTokenExpired(token) ? token : undefined;
+      this.token = typeof token === "string" && token ? token : undefined;
     } else {
       this.settings = Object.assign({}, DEFAULT_SETTINGS);
     }
@@ -629,7 +628,7 @@ export default class OSSPlugin extends Plugin {
 
   /** 当前登录用户是否服务端管理员 */
   isAdmin(): boolean {
-    return this.settings.role === "admin";
+    return this.isLoggedIn() && this.settings.role === "admin";
   }
 
   /** 服务端更新相关接口的薄封装，供设置页与轮询器调用 */

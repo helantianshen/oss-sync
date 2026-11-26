@@ -339,7 +339,10 @@ func authenticateAny(db *gorm.DB, cfg *config.Config, header string) (*Identity,
 		}
 		var u models.User
 		if err := db.Where("username = ?", user).First(&u).Error; err != nil {
-			return nil, errUserNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, errUserNotFound
+			}
+			return nil, errAuthUnavailable
 		}
 		if u.PasswordHash == "" || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(pass)) != nil {
 			return nil, errBadCred
@@ -361,7 +364,10 @@ func authenticateBearer(db *gorm.DB, cfg *config.Config, token string) (*models.
 func authenticateBearerIdentity(db *gorm.DB, cfg *config.Config, token string) (*Identity, error) {
 	claims, err := jwt.Parse(cfg.Auth.JWTSecret, token)
 	if err != nil {
-		return nil, errors.Join(errBadCred, err)
+		if errors.Is(err, jwt.ErrInvalidToken) || errors.Is(err, jwt.ErrExpired) {
+			return nil, errors.Join(errBadCred, err)
+		}
+		return nil, errAuthUnavailable
 	}
 	if claims.DeviceID != "" {
 		normalized := deviceauth.NormalizeClientID(string(claims.DeviceID))
@@ -371,7 +377,10 @@ func authenticateBearerIdentity(db *gorm.DB, cfg *config.Config, token string) (
 	}
 	var u models.User
 	if err := db.First(&u, claims.UserID).Error; err != nil {
-		return nil, errUserNotFound
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errUserNotFound
+		}
+		return nil, errAuthUnavailable
 	}
 	if claims.TokenVersion != u.TokenVersion {
 		return nil, errBadCred

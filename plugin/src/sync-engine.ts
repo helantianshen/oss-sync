@@ -249,7 +249,7 @@ export class SyncEngine {
 
   /**
    * 拉取服务端同步策略并应用；仅防抖或轮询参数变化时才重建对应句柄
-   * OSSApiError 视为策略协商失败，保留既有配置继续同步
+   * 策略协商失败时沿用既有配置；身份验证失败时结束本轮。
    */
   private async applyStrategy(): Promise<void> {
     const vaultID = this.plugin.settings.vaultId;
@@ -265,6 +265,7 @@ export class SyncEngine {
         this.resetPolling();
       }
     } catch (error: unknown) {
+      if (error instanceof OSSApiError && (error.status === 401 || !this.api.hasToken())) throw error;
       if (error instanceof OSSApiError || error instanceof SyncRequestTimeoutError) return;
       throw error;
     }

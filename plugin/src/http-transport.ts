@@ -188,7 +188,7 @@ async function sendRequest(request: HttpRequest, signal?: AbortSignal): Promise<
 export async function httpRequest(request: HttpRequest): Promise<HttpResponse> {
   const startedAt = Date.now();
   diagnosticRequestIDs.set(request, ++diagnosticRequestSequence);
-  trace(request, "request_started");
+  trace(request, "request_started", { hasAuthorization: !!request.headers.Authorization });
   let timer: number | undefined;
   try {
     const timeoutMs = request.timeoutMs;

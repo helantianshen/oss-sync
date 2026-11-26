@@ -16,6 +16,7 @@ import {
 
 const SYNC_CONTROL_TIMEOUT_MS = 30_000;
 const SYNC_TRANSFER_TIMEOUT_MS = 15 * 60_000;
+const SESSION_CHECK_TIMEOUT_MS = 15_000;
 
 /** 登录响应；device_status 为 pending 时令牌可用但需等待授权 */
 export interface AuthResponse {
@@ -474,7 +475,7 @@ export class OSSApiClient {
   /** 列出当前用户可见的仓库 */
   async listVaults(): Promise<{ vaults: VaultOut[] }> {
     const token = this.token;
-    const result = await this.doRequest<{ vaults: VaultOut[] }>("GET", "/api/vaults");
+    const result = await this.doRequest<{ vaults: VaultOut[] }>("GET", "/api/vaults", undefined, SESSION_CHECK_TIMEOUT_MS);
     if (token && this.token === token) this.setSessionStatus("approved");
     return result;
   }
@@ -1305,11 +1306,16 @@ export class OSSApiClient {
       if (requestToken && this.token === requestToken) {
         if (error.code === "device_pending") {
           this.setSessionStatus("pending");
-        } else if (error.code === "device_not_authorized") {
-          this.setSessionStatus("checking");
-        } else if (status === 401 || error.code === "device_unknown" || error.code === "device_revoked") {
+        } else if (isSessionRejection(error)) {
+          this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "session", stage: "verification_failed",
+            details: { status, code: error.code ?? "legacy_token_invalid", action: "cleared" } });
           this.setToken(null);
           await this.onSessionRejected?.(error);
+        } else if (status === 401 || error.code === "device_not_authorized") {
+          const code = error.code ?? (message === "unauthorized: missing Authorization header" ? "authorization_missing" : "unclassified_unauthorized");
+          this.diagnostics?.record({ kind: "detail", at: Date.now(), area: "session", stage: "verification_failed",
+            details: { status, code, action: "retained" } });
+          this.setSessionStatus("checking");
         }
       }
       throw error;
@@ -1334,6 +1340,22 @@ export class OSSApiClient {
     if (!serverTime) return;
     this.timeOffset = serverTime - Math.floor((before + after) / 2);
   }
+}
+
+/** 保留暂时无法验证的会话，只清除服务端明确判定失效的令牌或设备。 */
+function isSessionRejection(error: OSSApiError): boolean {
+  if (error.status !== 401 && error.status !== 403) return false;
+  if (error.code) {
+    return ["token_expired", "token_invalid", "device_unknown", "device_revoked",
+      "device_identity_required", "device_identity_mismatch"].includes(error.code);
+  }
+  // 兼容较早服务端返回的固定 JWT 错误。
+  return error.status === 401 && [
+    "unauthorized: invalid credentials",
+    "unauthorized: invalid credentials\ninvalid jwt token",
+    "unauthorized: invalid credentials\ninvalid device identity",
+    "unauthorized: invalid signature",
+  ].includes(error.message);
 }
 
 /** 大小写不敏感地读取响应头 */
